@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CJM Вариант A — Бренд-менеджер / Trade Marketing Manager</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f4f8; color: #1a202c; }
+
+  .header {
+    background: linear-gradient(135deg, #1e3a5f 0%, #2d6a9f 100%);
+    color: white;
+    padding: 32px 40px;
+    text-align: center;
+  }
+  .header h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+  .header .subtitle { font-size: 14px; opacity: 0.85; }
+  .header .meta { display: flex; gap: 32px; justify-content: center; margin-top: 20px; }
+  .header .meta-item { text-align: center; }
+  .header .meta-item .label { font-size: 11px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; }
+  .header .meta-item .value { font-size: 15px; font-weight: 600; margin-top: 4px; }
+
+  .persona-card {
+    max-width: 900px;
+    margin: 24px auto;
+    background: white;
+    border-radius: 12px;
+    padding: 24px;
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .persona-avatar {
+    width: 80px; height: 80px; border-radius: 50%;
+    background: linear-gradient(135deg, #2d6a9f, #4a9fd4);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px; flex-shrink: 0;
+  }
+  .persona-info h2 { font-size: 18px; color: #1e3a5f; margin-bottom: 4px; }
+  .persona-info .role { font-size: 13px; color: #718096; margin-bottom: 12px; }
+  .persona-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag { background: #ebf4ff; color: #2d6a9f; border-radius: 20px; padding: 4px 12px; font-size: 12px; font-weight: 500; }
+  .tag.pain { background: #fff5f5; color: #c53030; }
+  .tag.goal { background: #f0fff4; color: #276749; }
+
+  .cjm-container {
+    max-width: 1200px;
+    margin: 0 auto 40px;
+    padding: 0 20px;
+  }
+
+  .stages-header {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .stage-label {
+    background: #2d6a9f;
+    color: white;
+    text-align: center;
+    padding: 12px 8px;
+    border-radius: 8px 8px 0 0;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 140px repeat(6, 1fr);
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: stretch;
+  }
+  .row-label {
+    background: #2d6a9f;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 12px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    writing-mode: horizontal-tb;
+  }
+  .cell {
+    background: white;
+    border-radius: 8px;
+    padding: 12px;
+    min-height: 90px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .cell ul { list-style: none; padding: 0; }
+  .cell ul li::before { content: "• "; color: #2d6a9f; }
+  .cell ul li { margin-bottom: 4px; }
+
+  /* Emotion row */
+  .emotion-row { display: grid; grid-template-columns: 140px repeat(6, 1fr); gap: 8px; margin-bottom: 8px; }
+  .emotion-cell {
+    background: white;
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .emoji { font-size: 28px; display: block; margin-bottom: 6px; }
+  .emotion-label { font-size: 11px; color: #718096; }
+
+  /* NPS row */
+  .nps-row { display: grid; grid-template-columns: 140px repeat(6, 1fr); gap: 8px; margin-bottom: 8px; }
+  .nps-cell {
+    background: white;
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .nps-low { color: #c53030; }
+  .nps-mid { color: #d69e2e; }
+  .nps-high { color: #276749; }
+
+  /* Opportunity row */
+  .opp-cell {
+    background: #fffbeb;
+    border: 1px solid #f6e05e;
+    border-radius: 8px;
+    padding: 12px;
+    min-height: 80px;
+    font-size: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .opp-cell .opp-title { color: #744210; font-weight: 600; margin-bottom: 4px; }
+
+  /* Touchpoint badges */
+  .tp-badge {
+    display: inline-block;
+    background: #ebf4ff;
+    color: #2d6a9f;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+    margin: 2px;
+    font-weight: 500;
+  }
+
+  /* Stage divider */
+  .stages-top {
+    display: grid;
+    grid-template-columns: 140px repeat(6, 1fr);
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .stage-header-cell {
+    background: #1e3a5f;
+    color: white;
+    text-align: center;
+    padding: 14px 8px;
+    border-radius: 8px 8px 0 0;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .stage-num {
+    font-size: 20px;
+    font-weight: 900;
+    display: block;
+    margin-bottom: 2px;
+    opacity: 0.7;
+  }
+
+  .section-title {
+    background: #2d6a9f;
+    color: white;
+    padding: 8px 16px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: 6px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend {
+    max-width: 1200px;
+    margin: 0 auto 32px;
+    padding: 0 20px;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+
+  .footer {
+    text-align: center;
+    padding: 24px;
+    color: #718096;
+    font-size: 12px;
+    border-top: 1px solid #e2e8f0;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Customer Journey Map — Вариант A</h1>
+  <div class="subtitle">Бренд-менеджер / Trade Marketing Manager в FMCG-компании</div>
+  <div class="meta">
+    <div class="meta-item">
+      <div class="label">Персона</div>
+      <div class="value">Мария К., 32 года</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Должность</div>
+      <div class="value">Trade Marketing Manager</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Компания</div>
+      <div class="value">FMCG-производитель</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">SKU в мониторинге</div>
+      <div class="value">500+ SKU / 30+ площадок</div>
+    </div>
+  </div>
+</div>
+
+<!-- Persona Card -->
+<div class="persona-card">
+  <div class="persona-avatar">👩‍💼</div>
+  <div class="persona-info">
+    <h2>Мария Кузнецова</h2>
+    <div class="role">Trade Marketing Manager · ООО «ИндиЛайт» · Москва</div>
+    <div class="persona-tags">
+      <span class="tag pain">😤 Боль: ручной сбор данных 40ч/нед</span>
+      <span class="tag pain">😤 Боль: карточки не соответствуют стандарту</span>
+      <span class="tag pain">😤 Боль: конкурент снижает цены — узнаём поздно</span>
+      <span class="tag goal">🎯 Цель: ежедневная картина без ручного труда</span>
+      <span class="tag goal">🎯 Цель: отчёт для директора за 5 минут</span>
+      <span class="tag">💻 Excel-пользователь</span>
+      <span class="tag">📊 Еженедельные отчёты руководству</span>
+    </div>
+  </div>
+</div>
+
+<div class="cjm-container">
+
+  <!-- Stage headers -->
+  <div class="stages-top">
+    <div></div>
+    <div class="stage-header-cell"><span class="stage-num">01</span>ОСОЗНАНИЕ</div>
+    <div class="stage-header-cell"><span class="stage-num">02</span>ОЦЕНКА</div>
+    <div class="stage-header-cell"><span class="stage-num">03</span>ОНБОРДИНГ</div>
+    <div class="stage-header-cell"><span class="stage-num">04</span>ПЕРВАЯ ЦЕННОСТЬ</div>
+    <div class="stage-header-cell"><span class="stage-num">05</span>ЕЖЕДНЕВНАЯ РАБОТА</div>
+    <div class="stage-header-cell"><span class="stage-num">06</span>ЛОЯЛЬНОСТЬ</div>
+  </div>
+
+  <!-- Actions row -->
+  <div class="section-title" style="margin-left: 148px;">⚡ Действия пользователя</div>
+  <div class="row">
+    <div class="row-label">ДЕЙСТВИЯ</div>
+    <div class="cell">
+      <ul>
+        <li>Видит пост в LinkedIn о CAT</li>
+        <li>Коллега из другой компании делится отчётом</li>
+        <li>Гуглит «мониторинг онлайн-полки маркетплейсы»</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Заходит на easycomm.ru/cat</li>
+        <li>Смотрит демо-видео</li>
+        <li>Запрашивает демо-звонок</li>
+        <li>Изучает примеры отчётов</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Подписывает договор</li>
+        <li>Передаёт список SKU и площадок</li>
+        <li>Загружает эталонные материалы</li>
+        <li>Настраивает алёрты</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Получает первый Content Report.xlsx</li>
+        <li>Находит 12 SKU с низким score</li>
+        <li>Отправляет задачи на корректуру</li>
+        <li>Видит алёрт о скидке конкурента</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Открывает дашборд утром</li>
+        <li>Проверяет аномалии и алёрты</li>
+        <li>Скачивает еженедельный отчёт</li>
+        <li>Делится с директором</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Расширяет подписку на новые площадки</li>
+        <li>Рекомендует CAT коллегам</li>
+        <li>Участвует в product feedback</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Touchpoints row -->
+  <div class="section-title" style="margin-left: 148px;">🔗 Точки контакта</div>
+  <div class="row">
+    <div class="row-label">TOUCHPOINTS</div>
+    <div class="cell">
+      <span class="tp-badge">LinkedIn</span>
+      <span class="tp-badge">Word-of-mouth</span>
+      <span class="tp-badge">Google Search</span>
+      <span class="tp-badge">vc.ru</span>
+    </div>
+    <div class="cell">
+      <span class="tp-badge">easycomm.ru/cat</span>
+      <span class="tp-badge">Демо-видео</span>
+      <span class="tp-badge">Sales call</span>
+      <span class="tp-badge">КП / PDF</span>
+    </div>
+    <div class="cell">
+      <span class="tp-badge">CSV upload</span>
+      <span class="tp-badge">Customer Success</span>
+      <span class="tp-badge">Zoom-онбординг</span>
+      <span class="tp-badge">Документация</span>
+    </div>
+    <div class="cell">
+      <span class="tp-badge">Email (отчёт)</span>
+      <span class="tp-badge">Excel файл</span>
+      <span class="tp-badge">Email Alert</span>
+      <span class="tp-badge">Дашборд</span>
+    </div>
+    <div class="cell">
+      <span class="tp-badge">Дашборд (ежедн.)</span>
+      <span class="tp-badge">Excel экспорт</span>
+      <span class="tp-badge">Email алёрты</span>
+      <span class="tp-badge">Slack интеграция</span>
+    </div>
+    <div class="cell">
+      <span class="tp-badge">QBR встреча</span>
+      <span class="tp-badge">NPS опрос</span>
+      <span class="tp-badge">Product roadmap</span>
+      <span class="tp-badge">Реферальная программа</span>
+    </div>
+  </div>
+
+  <!-- Thoughts row -->
+  <div class="section-title" style="margin-left: 148px;">💭 Мысли и вопросы</div>
+  <div class="row">
+    <div class="row-label">МЫСЛИ</div>
+    <div class="cell" style="font-style:italic; color:#4a5568;">
+      «Интересно, есть ли инструмент для брендов, а не для продавцов?»
+    </div>
+    <div class="cell" style="font-style:italic; color:#4a5568;">
+      «Закрывает ли это контент-мониторинг? А дистрибуцию план/факт?»<br>
+      «Смогу ли я получить Excel в нашем формате?»
+    </div>
+    <div class="cell" style="font-style:italic; color:#4a5568;">
+      «Когда заработает? Сколько времени займёт настройка?»<br>
+      «Нужна ли IT-команда?»
+    </div>
+    <div class="cell" style="font-style:italic; color:#4a5568;">
+      «Это действительно работает! Нашла проблему которую не видела 2 месяца»
+    </div>
+    <div class="cell" style="font-style:italic; color:#4a5568;">
+      «Без CAT я бы тратила весь понедельник на этот отчёт»
+    </div>
+    <div class="cell" style="font-style:italic; color:#4a5568;">
+      «Хочу добавить Ozon и ещё 20 площадок. ROI очевиден»
+    </div>
+  </div>
+
+  <!-- Emotions row -->
+  <div class="section-title" style="margin-left: 148px;">❤️ Эмоции</div>
+  <div class="emotion-row">
+    <div class="row-label">ЭМОЦИИ</div>
+    <div class="emotion-cell"><span class="emoji">🤔</span><div class="emotion-label">Любопытство</div></div>
+    <div class="emotion-cell"><span class="emoji">🧐</span><div class="emotion-label">Скептицизм</div></div>
+    <div class="emotion-cell"><span class="emoji">😰</span><div class="emotion-label">Тревога за сроки</div></div>
+    <div class="emotion-cell"><span class="emoji">🤩</span><div class="emotion-label">Восторг от AHA</div></div>
+    <div class="emotion-cell"><span class="emoji">😊</span><div class="emotion-label">Спокойный контроль</div></div>
+    <div class="emotion-cell"><span class="emoji">🥰</span><div class="emotion-label">Лояльность</div></div>
+  </div>
+
+  <!-- NPS row -->
+  <div class="section-title" style="margin-left: 148px;">📊 NPS / Удовлетворённость</div>
+  <div class="nps-row">
+    <div class="row-label">NPS</div>
+    <div class="nps-cell nps-mid">5/10<br><small style="font-weight:400;font-size:10px;">Интерес, но сомнения</small></div>
+    <div class="nps-cell nps-mid">6/10<br><small style="font-weight:400;font-size:10px;">Хочет убедиться</small></div>
+    <div class="nps-cell nps-mid">7/10<br><small style="font-weight:400;font-size:10px;">Настройка — стресс</small></div>
+    <div class="nps-cell nps-high">9/10<br><small style="font-weight:400;font-size:10px;">AHA moment!</small></div>
+    <div class="nps-cell nps-high">9/10<br><small style="font-weight:400;font-size:10px;">Незаменим</small></div>
+    <div class="nps-cell nps-high">10/10<br><small style="font-weight:400;font-size:10px;">Промоутер</small></div>
+  </div>
+
+  <!-- Opportunities row -->
+  <div class="section-title" style="margin-left: 148px;">💡 Возможности для улучшения</div>
+  <div class="row">
+    <div class="row-label">ВОЗМОЖНОСТИ</div>
+    <div class="opp-cell">
+      <div class="opp-title">Content marketing</div>
+      Case study как бренд увеличил content score на 40% за 2 месяца
+    </div>
+    <div class="opp-cell">
+      <div class="opp-title">Product demo sandbox</div>
+      Интерактивный демо с реальными данными без регистрации
+    </div>
+    <div class="opp-cell">
+      <div class="opp-title">Self-serve onboarding</div>
+      Wizard: загрузи SKU-лист → система автоматически находит карточки
+    </div>
+    <div class="opp-cell">
+      <div class="opp-title">AHA moment accelerator</div>
+      Первый отчёт через 24ч после подключения, не через неделю
+    </div>
+    <div class="opp-cell">
+      <div class="opp-title">Daily digest email</div>
+      Краткий email-дайджест каждое утро в 9:00 → не нужно заходить в дашборд
+    </div>
+    <div class="opp-cell">
+      <div class="opp-title">Expansion playbook</div>
+      Авто-рекомендация добавить новые площадки на основе данных о продажах
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#c53030;"></div>Боль / Проблема</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#276749;"></div>Возможность / Улучшение</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#2d6a9f;"></div>Touchpoint</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#d69e2e;"></div>Нейтральный момент</div>
+</div>
+
+<div class="footer">
+  CAT Clone — CJM Вариант A «Бренд-менеджер» | Сгенерировано в рамках /replicate pipeline | 2025-03-20
+</div>
+
+</body>
+</html>
