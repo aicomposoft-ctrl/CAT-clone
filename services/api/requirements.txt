@@ -1,0 +1,22 @@
+# CAT API — pinned production dependencies
+# Update versions only after testing in a dev environment.
+
+# Web framework
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+
+# Database
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0
+alembic==1.13.3
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Validation / settings
+pydantic[email]==2.9.2
+pydantic-settings==2.5.2
+
+# Form data (required for OAuth2PasswordBearer tokenUrl compatibility)
+python-multipart==0.0.12
