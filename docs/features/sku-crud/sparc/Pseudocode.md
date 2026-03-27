@@ -136,8 +136,8 @@ OUTPUT: BulkUploadReport
        RAISE ValidationError("INVALID_FILE_TYPE")
 
 2. text = content.decode("utf-8-sig")  # strip BOM if present
-   dialect = detect_delimiter(text)    # check if comma or semicolon is more common
-   reader = csv.DictReader(text.splitlines(), dialect=dialect)
+   delimiter = detect_delimiter(text)  # returns "," or ";"
+   reader = csv.DictReader(text.splitlines(), delimiter=delimiter)
 
 3. headers = {h.strip().lower() for h in reader.fieldnames or []}
    IF "name" not in headers:
@@ -159,6 +159,8 @@ OUTPUT: BulkUploadReport
 
      brand_name = row.get("brand_name", "").strip()
      IF brand_name not in brand_cache:
+       # get_or_create_by_name MUST use INSERT ... ON CONFLICT (org_id, name) DO NOTHING RETURNING id
+       # to be race-safe under concurrent bulk uploads from the same org
        brand = await BrandRepository.get_or_create_by_name(db, org_id, brand_name)
        brand_cache[brand_name] = brand.id
      brand_id = brand_cache[brand_name]
@@ -173,10 +175,21 @@ OUTPUT: BulkUploadReport
      valid_rows.append(build_sku_dict(row, org_id, brand_id))
 
 6. # Batch insert in chunks of 100
+   # Wrap in try/except IntegrityError: concurrent duplicate inserts not caught by pre-check
+   # will be caught here and reported as errors (do not crash the whole upload)
    imported = 0
    FOR chunk IN chunks(valid_rows, size=100):
-     await SKURepository.bulk_create(db, chunk)
-     imported += len(chunk)
+     TRY:
+       await SKURepository.bulk_create(db, chunk)
+       imported += len(chunk)
+     EXCEPT IntegrityError:
+       # individual duplicate slipped through pre-check; fall back to row-by-row
+       FOR row IN chunk:
+         TRY:
+           await SKURepository.bulk_create(db, [row])
+           imported += 1
+         EXCEPT IntegrityError:
+           errors.append({ row: row["_row_num"], field: "article", reason: "SKU_ARTICLE_DUPLICATE" })
 
 7. RETURN BulkUploadReport(
      imported=imported,
@@ -195,7 +208,7 @@ HELPER: validate_row(row, row_num) → list[RowError]
   RETURN errors
 
 
-HELPER: detect_delimiter(text) → csv.Dialect
+HELPER: detect_delimiter(text) → str  # returns "," or ";"
   first_line = text.split("\n")[0]
   commas = first_line.count(",")
   semicolons = first_line.count(";")
@@ -303,6 +316,7 @@ OUTPUT: SKUPlatform
 | `SKU_ARTICLE_DUPLICATE` | 409 | Article already exists in this org |
 | `SKU_NOT_FOUND` | 404 | SKU not found (or belongs to another org) |
 | `BRAND_NOT_FOUND` | 404 | brand_id not found in this org |
+| `BRAND_NAME_DUPLICATE` | 409 | Brand with same name already exists in this org |
 | `SKU_PLATFORM_DUPLICATE` | 409 | SKU already linked to this platform |
 | `PLATFORM_NOT_FOUND` | 404 | Platform not found or inactive |
 | `CSV_TOO_LARGE` | 422 | More than 1000 rows |

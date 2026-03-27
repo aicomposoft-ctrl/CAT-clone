@@ -53,9 +53,9 @@ CREATE TABLE skus (
     reference_composition TEXT,
     is_active             BOOLEAN NOT NULL DEFAULT TRUE,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_skus_org_article UNIQUE (org_id, article)  -- nullable article excluded by partial index
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Partial unique index: allows multiple NULLs, enforces uniqueness only for non-null articles
 CREATE UNIQUE INDEX uq_skus_org_article_partial
     ON skus (org_id, article)
     WHERE article IS NOT NULL;

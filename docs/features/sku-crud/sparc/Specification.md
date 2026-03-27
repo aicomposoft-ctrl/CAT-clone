@@ -83,21 +83,44 @@ Scenario: Cross-org SKU isolation
 
 ```gherkin
 Scenario: Manager updates SKU name
-  Given SKU "3927" exists
+  Given I am authenticated as a manager
+  And SKU with article "3927" exists in my org
   When I PATCH /api/v1/skus/{id} with name = "Updated Name"
   Then the response is 200
-  And the returned SKU has the new name
+  And response body field "name" equals "Updated Name"
+  And response body field "id" equals the original SKU id
 
-Scenario: Manager deactivates a SKU
-  When I DELETE /api/v1/skus/{id}
+Scenario: Manager deactivates a SKU (soft delete)
+  Given I am authenticated as a manager
+  And SKU with id X exists in my org and is_active = true
+  When I DELETE /api/v1/skus/{X}
   Then the response is 200
-  And SKU is_active = false
-  And historical scores for this SKU are preserved
+  And response body field "is_active" is false
+  And GET /api/v1/skus?include_inactive=true still returns SKU X  # record preserved, not hard-deleted
+  And response body field "id" equals X
+
+Scenario: Viewer cannot update a SKU
+  Given I am authenticated as a viewer
+  When I PATCH /api/v1/skus/{id} with name = "Updated Name"
+  Then the response is 403
+  And detail is "INSUFFICIENT_PERMISSIONS"
+
+Scenario: Viewer cannot delete a SKU
+  Given I am authenticated as a viewer
+  When I DELETE /api/v1/skus/{id}
+  Then the response is 403
+  And detail is "INSUFFICIENT_PERMISSIONS"
 
 Scenario: Manager cannot update another org's SKU
   Given SKU belongs to org_B
   When org_A manager sends PATCH /api/v1/skus/{id}
   Then the response is 404  # not 403 — don't reveal existence
+
+Scenario: PATCH on soft-deleted SKU re-activates it
+  Given SKU with id X exists and is_active = false
+  When I PATCH /api/v1/skus/{X} with is_active = true
+  Then the response is 200
+  And response body field "is_active" is true
 ```
 
 ### US-S04: Bulk CSV Upload
@@ -145,17 +168,45 @@ Scenario: Non-CSV file is rejected
 
 ```gherkin
 Scenario: Manager creates a brand
+  Given I am authenticated as a manager
   When I POST /api/v1/brands with name="ИндиЛайт" type="client"
   Then the response is 201
-  And brand org_id = my org_id
+  And response body contains "id" (UUID)
+  And response body field "name" equals "ИндиЛайт"
+  And response body field "type" equals "client"
+  And response body field "org_id" equals the authenticated user's org_id
 
-Scenario: Manager lists brands
+Scenario: Manager creates a competitor brand
+  Given I am authenticated as a manager
+  When I POST /api/v1/brands with name="Competitor Co" type="competitor"
+  Then the response is 201
+  And response body field "type" equals "competitor"
+
+Scenario: Manager lists brands (org-scoped)
+  Given org_B has 5 brands
+  And my org has 3 brands
   When I GET /api/v1/brands
-  Then I see only my org's brands
+  Then the response is 200
+  And response body field "items" contains exactly 3 brands
+  And all returned brands have "org_id" equal to my org_id
+  And org_B brands are not included in the response
+
+Scenario: Viewer cannot create brand
+  Given I am authenticated as a viewer
+  When I POST /api/v1/brands with name="Test" type="client"
+  Then the response is 403
+  And detail is "INSUFFICIENT_PERMISSIONS"
 
 Scenario: Brand type validation
+  Given I am authenticated as a manager
   When I POST /api/v1/brands with type="unknown"
   Then the response is 422
+
+Scenario: Duplicate brand name within same org is rejected
+  Given brand "ИндиЛайт" already exists in my org
+  When I POST /api/v1/brands with name="ИндиЛайт" type="competitor"
+  Then the response is 409
+  And detail is "BRAND_NAME_DUPLICATE"
 ```
 
 ### US-S06: Platform Catalog and SKU-Platform Linking
@@ -163,12 +214,38 @@ Scenario: Brand type validation
 ```gherkin
 Scenario: Manager views platform catalog
   When I GET /api/v1/platforms
-  Then I see all active platforms (read-only, shared across all orgs)
+  Then the response is 200
+  And response body field "items" is a list
+  And each item contains "id", "name", "type", "is_active"
+  And all returned platforms have "is_active" equal to true
+  And platforms are shared across all orgs (same list regardless of org)
+
+Scenario: Platform catalog is empty on fresh deploy
+  Given no platforms are seeded
+  When I GET /api/v1/platforms
+  Then the response is 200
+  And response body field "items" is an empty list
 
 Scenario: Manager links SKU to platform
+  Given I am authenticated as a manager
+  And SKU exists in my org
+  And the platform exists and is active
   When I POST /api/v1/sku-platforms with sku_id and platform_id
   Then the response is 201
-  And monitoring is enabled for that SKU × Platform pair
+  And response body contains "id" (UUID)
+  And response body field "is_monitored" is true
+  And response body field "sku_id" equals the provided sku_id
+
+Scenario: Manager cannot link SKU from another org
+  Given sku_id belongs to org_B
+  When I POST /api/v1/sku-platforms with that sku_id
+  Then the response is 404
+
+Scenario: Viewer cannot link SKU to platform
+  Given I am authenticated as a viewer
+  When I POST /api/v1/sku-platforms with sku_id and platform_id
+  Then the response is 403
+  And detail is "INSUFFICIENT_PERMISSIONS"
 
 Scenario: Duplicate link is rejected
   Given SKU X is already linked to Platform Y
@@ -177,9 +254,15 @@ Scenario: Duplicate link is rejected
   And detail is "SKU_PLATFORM_DUPLICATE"
 
 Scenario: Manager unlinks SKU from platform
-  When I DELETE /api/v1/sku-platforms/{id}
+  Given SKU X is linked to Platform Y via sku_platform record with id Z
+  When I DELETE /api/v1/sku-platforms/{Z}
   Then the response is 200
-  And future collection cycles skip this pair
+  And GET /api/v1/sku-platforms/{Z} returns 404  # record is hard-deleted
+
+Scenario: Manager cannot unlink another org's sku_platform
+  Given sku_platform id belongs to org_B
+  When I DELETE /api/v1/sku-platforms/{id}
+  Then the response is 404
 ```
 
 ---
@@ -233,6 +316,13 @@ DELETE /api/v1/sku-platforms/{id}      unlink
 | POST/DELETE sku-platforms | ✅ | ✅ | ❌ |
 | POST brands | ✅ | ✅ | ❌ |
 | bulk-upload | ✅ | ✅ | ❌ |
+
+### Rate Limits
+| Endpoint | Limit | Scope |
+|----------|-------|-------|
+| POST /api/v1/skus/bulk-upload | 5 req/min | per org |
+| POST /api/v1/skus | 60 req/min | per user |
+| GET (any) | 100 req/min | per user |
 
 ---
 
