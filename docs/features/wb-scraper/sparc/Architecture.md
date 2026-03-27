@@ -223,24 +223,58 @@ def collect_wb_content(self, sku_platform_id: str):
 
 ```python
 class ProxyRotator:
+    """
+    Thread-safe round-robin proxy rotator.
+
+    Instance is created ONCE per Celery worker process via worker_process_init signal,
+    not inside task bodies. This avoids a blocking HTTP call per task and enables
+    connection reuse.
+    """
+
     def __init__(self, proxy_list: list[str]):
         self._proxies = proxy_list
         self._idx = 0
+        self._lock = threading.Lock()  # thread-safe for Celery thread pool
 
     def next(self) -> str | None:
         if not self._proxies:
             return None
-        proxy = self._proxies[self._idx % len(self._proxies)]
-        self._idx += 1
+        with self._lock:
+            proxy = self._proxies[self._idx % len(self._proxies)]
+            self._idx += 1
         return proxy
 
     @classmethod
     def from_env(cls) -> "ProxyRotator":
+        """
+        Fetch proxy list from PROXY_LIST_URL with timeout.
+        Called once per worker process at startup (Celery worker_process_init signal).
+        """
         url = os.environ.get("PROXY_LIST_URL")
         if not url:
             return cls([])
-        proxies = requests.get(url).text.strip().splitlines()
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        proxies = [p.strip() for p in resp.text.strip().splitlines() if p.strip()]
         return cls(proxies)
+
+
+# Module-level singleton — populated by Celery worker_process_init signal
+_proxy_rotator: ProxyRotator | None = None
+
+
+def get_proxy_rotator() -> ProxyRotator:
+    global _proxy_rotator
+    if _proxy_rotator is None:
+        _proxy_rotator = ProxyRotator.from_env()
+    return _proxy_rotator
+
+
+# In celery_app.py:
+# from celery.signals import worker_process_init
+# @worker_process_init.connect
+# def init_worker(**kwargs):
+#     get_proxy_rotator()  # warm up proxy list on worker startup
 ```
 
 ---
@@ -256,7 +290,26 @@ Celery workers use **synchronous** SQLAlchemy sessions (not async). FastAPI API 
 
 ---
 
-## 8. New Files / No Migration
+## 8. Image URL Security
+
+Before fetching `content.image_url` with httpx, the URL must pass an allowlist check:
+
+```python
+WB_IMAGE_CDN_PATTERN = re.compile(
+    r"^https://basket-\d{2}\.wbbasket\.ru/vol\d+/part\d+/\d+/images/big/\d+\.jpg$"
+)
+
+def validate_wb_image_url(url: str) -> bool:
+    """Reject any URL that doesn't match the deterministic WB CDN pattern."""
+    return bool(WB_IMAGE_CDN_PATTERN.match(url))
+```
+
+If `validate_wb_image_url` returns False: log warning, set `image_url = None`, do not fetch.
+This prevents SSRF if `ContentData.image_url` is ever populated from an untrusted source.
+
+---
+
+## 9. New Files / No Migration
 
 No new DB tables. Writes go to existing tables:
 - `content_scores` — created in migration 0003 (separate feature)

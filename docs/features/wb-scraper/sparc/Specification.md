@@ -15,7 +15,8 @@ Scenario: Celery task collects content for a WB SKU
   Given sku_platform record exists with platform="Wildberries" and external_id="12345678"
   When collect_wb_content task runs for that sku_platform
   Then a content_scores row is upserted for today's date
-  And collected_image_url is set to an S3 key (downloaded image)
+  And collected_title is set (max 500 chars, HTML stripped)
+  And collected_image_url is set to an S3 key (downloaded image) or null if download fails
   And collected_description is sanitised (HTML stripped, max 5000 chars)
   And collected_composition is set (or null if not present)
 
@@ -34,6 +35,17 @@ Scenario: Product not found on WB (404 or deleted)
   Given nm_id does not exist or product is deleted
   When collect_wb_content is called
   Then task records failure reason "NOT_FOUND" and does not create a content_scores row
+
+Scenario: WB returns unexpected response structure
+  Given WB card API returns valid JSON but without expected "data.products" key
+  When collect_wb_content is called
+  Then task records failure reason "PARSE_ERROR" and does not create a content_scores row
+
+Scenario: Cross-org isolation — task only writes to correct org's data
+  Given sku_platform_A belongs to org_A and sku_platform_B belongs to org_B
+  When collect_wb_content runs for sku_platform_A
+  Then only org_A's content_scores row is written
+  And org_B's data is not affected
 ```
 
 ### US-W02: Price Collection
@@ -52,6 +64,12 @@ Scenario: Product has no active discount
   When collect_wb_price task runs
   Then price_snapshots row has discount_pct = 0 and promo_label = null
   And price == original_price
+
+Scenario: WB returns 429 on price endpoint
+  Given WB card API returns 429
+  When collect_wb_price task runs
+  Then task retries with exponential backoff (max 3 times)
+  And marks failure "RATE_LIMITED"
 
 Scenario: Price endpoint unavailable
   Given card API returns 503
@@ -77,6 +95,18 @@ Scenario: SKU is not sold in any warehouse
   Given total_qty = 0 across all warehouses
   When collect_wb_stock task runs
   Then in_stock = false
+
+Scenario: Stock API unavailable
+  Given WB card API returns 503
+  When collect_wb_stock task runs
+  Then task retries 3 times then marks failure "API_UNAVAILABLE"
+  And no stock row is written
+
+Scenario: Stock task does not create partial content_scores row
+  Given collect_wb_stock runs before collect_wb_content for today
+  When stock task upserts stock data
+  Then content fields (collected_description, collected_image_url) remain null
+  And the row is not passed to ML scoring until content fields are populated
 ```
 
 ### US-W04: Review Collection
@@ -140,10 +170,15 @@ collect_wb_prices_all()   -> None   # orchestrator
 ### content_scores (upsert on sku_platform_id + scored_at)
 ```
 scored_at:              today's date
+collected_title:        str max 500 chars, HTML stripped
 collected_image_url:    "org/{org_id}/sku/{sku_id}/wb/main.jpg" (S3 key) or null
 collected_description:  str max 5000 chars, HTML stripped
 collected_composition:  str max 2000 chars, HTML stripped, or null
+in_stock:               bool (from stock task, default null until stock task runs)
+warehouse_qty:          int (total units across all warehouses)
 ```
+
+**Note:** `content_scores` row may be partially populated — content task and stock task both upsert the same row for the day. ML scoring pipeline must check that `collected_description IS NOT NULL` before scoring.
 
 ### price_snapshots (insert)
 ```

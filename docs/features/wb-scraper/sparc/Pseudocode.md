@@ -46,7 +46,7 @@ SIDE EFFECTS: upserts content_scores row, uploads image to S3
      RAISE  # triggers Celery retry
 
 5. s3_key = None
-   IF content.image_url:
+   IF content.image_url AND validate_wb_image_url(content.image_url):
      TRY:
        image_bytes = httpx.get(content.image_url, timeout=30).content
        ext = ".jpg"
@@ -55,6 +55,9 @@ SIDE EFFECTS: upserts content_scores row, uploads image to S3
      EXCEPT Exception as e:
        LOG warning f"Image download failed for {nm_id}: {e}"
        s3_key = None  # non-fatal
+   ELIF content.image_url:
+     LOG warning f"Image URL failed allowlist check for {nm_id}: {content.image_url}"
+     # Do NOT fetch — SSRF guard
 
 6. today = date.today()
    existing = db.query(ContentScore).filter(
@@ -117,7 +120,7 @@ INPUT: sku_platform_id: str
 1. sp = load_sku_platform(sku_platform_id)
    nm_id = validate_nm_id(sp)
 
-2. scraper = WildberriesScraper(proxy_rotator=ProxyRotator.from_env())
+2. scraper = WildberriesScraper(proxy_rotator=get_proxy_rotator())
    stock_data = asyncio.run(scraper.collect_stock(nm_id))
 
 3. today = date.today()
@@ -127,14 +130,26 @@ INPUT: sku_platform_id: str
    ).first()
 
    IF existing:
+     # Update stock fields only — do not overwrite content fields
      existing.in_stock = stock_data.in_stock
+     existing.warehouse_qty = stock_data.total_qty
    ELSE:
+     # Create partial row; ML scoring MUST check collected_description IS NOT NULL before scoring
      db.add(ContentScore(
        sku_platform_id=sp.id,
        scored_at=today,
        in_stock=stock_data.in_stock,
+       warehouse_qty=stock_data.total_qty,
+       # All content fields (collected_title, collected_description, etc.) remain NULL
+       # They will be populated when collect_wb_content runs
      ))
    db.commit()
+
+NOTE: partial-row contract — ML pipeline query:
+  SELECT * FROM content_scores
+  WHERE scored_at = today
+  AND collected_description IS NOT NULL  ← required guard
+  AND sku_platform_id = X
 ```
 
 ---

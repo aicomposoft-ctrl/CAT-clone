@@ -12,13 +12,20 @@
 **Risk:** WB may change card API structure. Monitored via `PARSE_ERROR` alerts.
 
 ### Q2: Sync vs. Async in Celery workers
-**Decision:** Celery tasks are synchronous functions. Async scraper methods wrapped with `asyncio.run()`.
-**Rationale:** Celery workers run in a threaded/forked model, not an asyncio event loop. Running `asyncio.run()` inside a task is the standard pattern for bridging sync Celery with async HTTP clients.
-**Risk:** If Celery is configured with gevent/eventlet concurrency, `asyncio.run()` may fail. Default Celery prefork is safe.
+**Decision:** Celery tasks are synchronous functions. Async scraper methods wrapped with `asyncio.run()`. **Celery concurrency must be `prefork` (default) — gevent/eventlet are FORBIDDEN.**
+**Rationale:** Celery workers run in a forked process model. `asyncio.run()` is safe per process. gevent/eventlet patch the event loop and will cause `RuntimeError: This event loop is already running` on `asyncio.run()`.
+**Guard:** Add runtime check in `celery_app.py`:
+```python
+import celery
+if celery.current_app.conf.worker_pool == "eventlet":
+    raise RuntimeError("WB scraper requires prefork Celery pool — eventlet is not supported")
+```
+**ProxyRotator:** Loaded ONCE per worker process via `worker_process_init` signal, not per task. See Architecture §6.
 
 ### Q3: Prices in kopeks
-**Decision:** WB card API returns prices as integer kopeks × 100 (i.e., divide by 100 to get rubles, then divide by 100 again = divide by 10000... actually WB returns prices multiplied by 100 in kopeks). Use `Decimal(str(value)) / 100`.
-**Confirmed:** `{"product": 29900}` = 299.00 RUB. Formula: `price_rub = Decimal(str(raw)) / 100`.
+**Decision:** WB card API returns prices as integers where the value equals kopeks × 1 (i.e., the value IS the price in kopeks — 1 kopek = 0.01 RUB). Divide by 100 to get rubles.
+**Confirmed:** `{"product": 29900}` = 29900 kopeks = **299.00 RUB**. Formula: `price_rub = Decimal(str(raw)) / 100`.
+**NOT** divided by 10000. The confusion in earlier drafts was incorrect — the formula is simply `/ 100`.
 
 ### Q4: Content scores `in_stock` column
 **Decision:** Add `in_stock BOOLEAN` column to `content_scores` table in migration 0003.
