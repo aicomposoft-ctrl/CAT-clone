@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from app.core.config import get_settings, validate_required_secrets
 from app.auth.router import router as auth_router
 from app.catalog.router import brand_router, platform_router, sku_platform_router, sku_router
+from app.catalog.reference_router import reference_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,3 +64,4 @@ app.include_router(brand_router, prefix="/api/v1/brands", tags=["brands"])
 app.include_router(sku_router, prefix="/api/v1/skus", tags=["skus"])
 app.include_router(platform_router, prefix="/api/v1/platforms", tags=["platforms"])
 app.include_router(sku_platform_router, prefix="/api/v1/sku-platforms", tags=["sku-platforms"])
+app.include_router(reference_router, prefix="/api/v1/skus", tags=["reference"])
