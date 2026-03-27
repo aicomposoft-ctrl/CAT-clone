@@ -24,7 +24,7 @@ Per SKU × Ozon platform combination (`sku_platform` record where `platform.name
 |-----------|--------|-----------|
 | Content | title, description, rich_description (HTML→plain), main image URL | Daily 02:00 |
 | Price | price, original_price, discount_pct, promo_label | Every 4h |
-| Stock | in_stock (bool), available_qty | Daily 02:00 |
+| Stock | in_stock (bool), warehouse_qty | Daily 02:00 |
 | Reviews | review_text, rating (1-5), review_date, external_review_id | Daily 02:00 |
 
 `external_id` on `sku_platforms` = Ozon item ID (integer string), e.g. `"123456789"`.

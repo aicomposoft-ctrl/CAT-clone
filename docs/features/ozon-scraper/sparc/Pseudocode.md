@@ -206,11 +206,15 @@ SIDE EFFECTS: upserts content_scores row, uploads image to MinIO
             .filter(SKUPlatform.id == uuid.UUID(sku_platform_id))
             .first()
    IF row is None: RETURN
-   sp_id, sku_id, item_id, org_id = row
+   sp_id, sku_id, raw_item_id, org_id = row
 
-2. IF item_id is None or item_id == "":
-     LOG info "NO_ITEM_ID for {sku_platform_id}"
-     RETURN
+2. # Validate item_id — numeric check before any HTTP call
+   IF raw_item_id is None or raw_item_id.strip() == "":
+     LOG info "NO_ITEM_ID for {sku_platform_id}"; RETURN
+   TRY:
+     item_id = _parse_item_id(raw_item_id)  # raises ScraperError("PARSE_ERROR") if not numeric
+   EXCEPT ScraperError AS e:
+     LOG warning f"Invalid item_id {raw_item_id!r}: {e}"; RETURN
 
 3. scraper = OzonScraper(proxy_rotator=get_proxy_rotator())
    TRY:
@@ -222,32 +226,35 @@ SIDE EFFECTS: upserts content_scores row, uploads image to MinIO
 4. s3_key = None
    IF content.image_url:
      TRY:
+       # _download_image_async re-validates URL against _OZ_IMAGE_CDN_RE internally
        image_bytes = asyncio.run(_download_image_async(content.image_url, get_proxy_rotator().next()))
        s3_key = f"org/{org_id}/sku/{sku_id}/ozon/main.jpg"
        minio.upload(s3_key, image_bytes, "image/jpeg")
-     EXCEPT Exception AS e:
+     EXCEPT (ValueError, Exception) AS e:
        LOG warning "Image download failed: {e}"
        s3_key = None  # non-fatal
 
 5. today = date.today()
+   # Use pg_insert ON CONFLICT DO UPDATE to handle concurrent task execution safely
+   # Avoids SELECT-then-INSERT race condition when content + stock tasks run in parallel
    WITH get_db_session() AS db:
-     existing = db.query(ContentScore)
-                  .filter(ContentScore.sku_platform_id == sp_id,
-                          ContentScore.scored_at == today)
-                  .first()
-     IF existing:
-       existing.collected_title       = content.title
-       existing.collected_description = content.description
-       existing.collected_composition = content.composition
-       existing.collected_image_url   = s3_key
-     ELSE:
-       db.add(ContentScore(
-         sku_platform_id=sp_id, scored_at=today,
-         collected_title=content.title,
-         collected_description=content.description,
-         collected_composition=content.composition,
-         collected_image_url=s3_key,
-       ))
+     stmt = pg_insert(ContentScore).values(
+       sku_platform_id=sp_id,
+       scored_at=today,
+       collected_title=content.title,
+       collected_description=content.description,
+       collected_composition=content.composition,
+       collected_image_url=s3_key,
+     ).on_conflict_do_update(
+       constraint="uq_content_scores_sp_date",
+       set_={
+         "collected_title":       content.title,
+         "collected_description": content.description,
+         "collected_composition": content.composition,
+         "collected_image_url":   s3_key,
+       }
+     )
+     db.execute(stmt)
 ```
 
 ---
@@ -263,9 +270,14 @@ INPUT: sku_platform_id: str
             .filter(SKUPlatform.id == uuid.UUID(sku_platform_id))
             .first()
    IF row is None: RETURN
-   sp_id, item_id, org_id = row
+   sp_id, raw_item_id, org_id = row
 
-2. IF item_id is None: RETURN
+2. # Validate item_id before HTTP call
+   IF raw_item_id is None or raw_item_id.strip() == "":
+     RETURN  # NO_ITEM_ID silent skip
+   TRY:
+     item_id = _parse_item_id(raw_item_id)
+   EXCEPT ScraperError: RETURN
 
 3. scraper = OzonScraper(proxy_rotator=get_proxy_rotator())
    TRY:
@@ -290,25 +302,30 @@ INPUT: sku_platform_id: str
 ### Algorithm: collect_ozon_stock (Celery task)
 
 ```
-# Identical pattern to collect_ozon_price (steps 1-3),
-# then upsert content_scores stock fields:
+# Steps 1-3 identical pattern to collect_ozon_price, then:
 
 4. today = date.today()
+   # Use pg_insert ON CONFLICT DO UPDATE — safe for concurrent content+stock task execution
+   # Partial-row: only set stock fields; content fields remain NULL until content task runs
    WITH get_db_session() AS db:
-     existing = db.query(ContentScore)
-                  .filter(ContentScore.sku_platform_id == sp_id,
-                          ContentScore.scored_at == today)
-                  .first()
-     IF existing:
-       existing.in_stock     = stock_data.in_stock
-       existing.warehouse_qty = stock_data.total_qty
-     ELSE:
-       db.add(ContentScore(
-         sku_platform_id=sp_id, scored_at=today,
-         in_stock=stock_data.in_stock,
-         warehouse_qty=stock_data.total_qty,
-         # content fields remain NULL — partial-row contract
-       ))
+     stmt = pg_insert(ContentScore).values(
+       sku_platform_id=sp_id,
+       scored_at=today,
+       in_stock=stock_data.in_stock,
+       warehouse_qty=stock_data.total_qty,
+     ).on_conflict_do_update(
+       constraint="uq_content_scores_sp_date",
+       set_={
+         "in_stock":      stock_data.in_stock,
+         "warehouse_qty": stock_data.total_qty,
+       }
+     )
+     db.execute(stmt)
+
+NOTE: partial-row contract — content fields (collected_title, collected_description, etc.)
+are NOT included in set_ clause. ON CONFLICT updates ONLY stock fields, preserving
+any content already written by the content task.
+ML pipeline guard: SELECT * FROM content_scores WHERE collected_description IS NOT NULL
 ```
 
 ---

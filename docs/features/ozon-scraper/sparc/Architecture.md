@@ -93,11 +93,48 @@ Ozon images are served from `ir.ozone.ru`. Before fetching, validate URL against
 
 ```python
 _OZ_IMAGE_CDN_RE = re.compile(
-    r"^https://ir\.ozone\.ru/s3/multimedia-[a-z0-9]+/[a-f0-9]+/(?:wc\d+/)?[a-f0-9]+\.jpg$"
+    r"^https://ir\.ozone\.ru/s3/multimedia-[a-z0-9]+/[a-z0-9]+/(?:wc\d+/)?[a-z0-9]+\.jpg$"
 )
 ```
 
 If URL doesn't match: log warning, set `image_url = None`, do NOT fetch (SSRF guard).
+
+Note: path segments use `[a-z0-9]` (alphanumeric), NOT `[a-f0-9]` (hex only). Ozon CDN uses full alphanumeric hash strings — hex-only would silently reject ~30-50% of valid image URLs.
+
+`_download_image_async` re-validates the URL internally before any HTTP request:
+
+```python
+async def _download_image_async(url: str, proxy: str | None) -> bytes:
+    if not _OZ_IMAGE_CDN_RE.match(url):
+        raise ValueError(f"Image URL failed SSRF allowlist: {url}")
+    async with httpx.AsyncClient(proxy=proxy, timeout=30.0) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return resp.content
+```
+
+---
+
+## 4b. item_id Validation
+
+All 4 Celery tasks must call `_parse_item_id()` before using `item_id` in any URL or DB query:
+
+```python
+def _parse_item_id(raw: str | None) -> str:
+    """
+    Validate that item_id is a non-empty numeric string.
+    Raises ScraperError("PARSE_ERROR") if not numeric.
+    Returns the stripped string if valid.
+    """
+    if not raw or not raw.strip():
+        raise ValueError("NO_ITEM_ID")  # caller catches as early return
+    stripped = raw.strip()
+    if not stripped.isdigit():
+        raise ScraperError("PARSE_ERROR", f"item_id is not numeric: {stripped!r}")
+    return stripped
+```
+
+Enforcement: called at step 2 of every task, before any HTTP call.
 
 ---
 
@@ -164,6 +201,7 @@ def _load_ozon_sku_platform_ids(db) -> list[str]:
     rows = (
         db.query(SKUPlatform.id)
         .join(Platform, Platform.id == SKUPlatform.platform_id)
+        .join(SKU, SKU.id == SKUPlatform.sku_id)
         .filter(
             Platform.name == _OZ_PLATFORM_NAME,
             Platform.is_active.is_(True),
@@ -175,6 +213,14 @@ def _load_ozon_sku_platform_ids(db) -> list[str]:
 ```
 
 ID-only query — keeps memory flat at any catalog size.
+
+**Cross-org query rationale:** The orchestrator intentionally returns IDs from all orgs. This is safe because:
+1. Each individual task re-queries `(SKUPlatform.id, SKUPlatform.sku_id, SKUPlatform.external_id, SKU.org_id)` and uses the `org_id` for namespacing S3 keys and content_scores writes.
+2. The `content_scores` upsert is keyed on `sku_platform_id` — a value already bound to exactly one `org_id` via FK (`sku_platform_id → sku_id → org_id`). Cross-tenant contamination via sku_platform_id collision is structurally impossible.
+3. PostgreSQL RLS policies provide a final backstop.
+4. The orchestrator does NOT write to the DB — it only reads IDs, then dispatches tasks that self-enforce tenant scoping.
+
+This is the same pattern as `wb_orchestrator.py` (already reviewed and accepted).
 
 ---
 
