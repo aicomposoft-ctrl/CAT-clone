@@ -43,16 +43,24 @@ class UserRepository:
     async def increment_failed_attempts(
         db: AsyncSession,
         user_id: UUID,
-        new_count: int,
-    ) -> None:
-        """Bump failed_attempts counter without triggering a lockout."""
-        await db.execute(
+    ) -> int:
+        """
+        Atomically increment failed_attempts by 1 and return the new count.
+
+        Uses SQL-side arithmetic (failed_attempts + 1) to avoid read-modify-write
+        race conditions when concurrent login attempts arrive for the same account.
+        """
+        result = await db.execute(
             update(User)
             .where(User.id == user_id)
-            .values(failed_attempts=new_count)
+            .values(failed_attempts=User.failed_attempts + 1)
+            .returning(User.failed_attempts)
         )
         await db.commit()
+        row = result.fetchone()
+        new_count = row[0] if row else 0
         logger.debug("auth.repo.failed_attempts_incremented user_id=%s count=%d", user_id, new_count)
+        return new_count
 
     @staticmethod
     async def set_lockout(

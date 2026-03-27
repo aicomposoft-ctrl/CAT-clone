@@ -11,8 +11,12 @@ asyncpg==0.29.0
 alembic==1.13.3
 
 # Authentication
+# NOTE: passlib 1.7.4 is incompatible with bcrypt>=4.0 (detect_wrap_bug API change).
+# Pinned to bcrypt<4.0 until passlib is replaced with PyJWT + bcrypt directly.
+# Tracked: replace python-jose with PyJWT>=2.8.0 (CVE-2024-33664/33663 in python-jose)
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt<4.0.0
 
 # Validation / settings
 pydantic[email]==2.9.2

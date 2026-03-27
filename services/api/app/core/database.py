@@ -12,13 +12,21 @@ from sqlalchemy.orm import DeclarativeBase
 from app.core.config import get_settings
 
 _settings = get_settings()
+_db_url = _settings.POSTGRES_URL
+
+# SQLite (used in tests) does not support pool_size/max_overflow.
+# Production PostgreSQL deployments get a 30-connection pool.
+_pool_kwargs: dict = (
+    {"pool_size": 10, "max_overflow": 20}
+    if not _db_url.startswith("sqlite")
+    else {}
+)
 
 engine = create_async_engine(
-    _settings.POSTGRES_URL,
-    pool_size=10,
-    max_overflow=20,
+    _db_url,
     pool_pre_ping=True,  # detect stale connections before use
     echo=False,
+    **_pool_kwargs,
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -35,13 +43,4 @@ class Base(DeclarativeBase):
     pass
 
 
-async def get_db() -> AsyncSession:  # type: ignore[return]
-    """FastAPI dependency: yields an AsyncSession and closes it on exit."""
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+

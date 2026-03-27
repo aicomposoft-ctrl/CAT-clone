@@ -17,7 +17,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 
-from app.core.config import validate_required_secrets
+from app.core.config import get_settings, validate_required_secrets
 from app.auth.router import router as auth_router
 
 logging.basicConfig(
@@ -43,14 +43,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("CAT API shutting down")
 
 
+_settings = get_settings()
+_is_production = _settings.APP_ENV == "production"
+
 app = FastAPI(
     title="CAT API",
     description="Commerce Analytics Tool — SaaS monitoring platform for FMCG brands",
     version="1.0.0",
     lifespan=lifespan,
-    # Disable the default /docs redirect so Nginx controls exposure
-    docs_url="/docs",
-    redoc_url="/redoc",
+    # Swagger UI and ReDoc are disabled in production to avoid leaking API surface.
+    # In development/staging they are available at /docs and /redoc.
+    docs_url=None if _is_production else "/docs",
+    redoc_url=None if _is_production else "/redoc",
 )
 
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])

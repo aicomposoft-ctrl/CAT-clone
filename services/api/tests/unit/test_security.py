@@ -94,10 +94,9 @@ def test_decode_token_wrong_type_raises():
 
 def test_decode_token_tampered_raises():
     token = create_access_token(USER_ID, ORG_ID, "viewer")
-    # Flip a character in the signature part
-    parts = token.split(".")
-    parts[2] = parts[2][:-1] + ("A" if parts[2][-1] != "A" else "B")
-    tampered = ".".join(parts)
+    # Replace the entire signature segment with clearly invalid bytes
+    header, payload, _ = token.split(".")
+    tampered = f"{header}.{payload}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     with pytest.raises(AuthError):
         decode_token(tampered, expected_type="access")
 

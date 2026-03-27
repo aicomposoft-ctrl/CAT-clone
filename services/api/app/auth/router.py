@@ -94,7 +94,7 @@ async def logout(
     Idempotent — succeeds even if the token is already revoked or not found.
     Requires a valid access token to prevent unauthenticated token revocation.
     """
-    await auth_service.revoke_refresh_token(db, body.refresh_token)
+    await auth_service.revoke_refresh_token(db, body.refresh_token, current_user.id)
     return {"message": "Logged out successfully"}
 
 

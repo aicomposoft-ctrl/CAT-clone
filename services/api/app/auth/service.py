@@ -10,6 +10,7 @@ Algorithms follow Pseudocode.md section 2 exactly.
 Security hardening from Refinement.md sections 1–2.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -23,7 +24,7 @@ from app.auth.repository import (
     RefreshTokenRepository,
     UserRepository,
 )
-from app.auth.schemas import TokenResponse, UserInfo
+from app.auth.schemas import RefreshResponse, TokenResponse, UserInfo
 from app.core.security import (
     AuthError,
     LockoutError,
@@ -33,6 +34,14 @@ from app.core.security import (
     get_timing_dummy_hash,
     verify_password,
 )
+
+# ---------------------------------------------------------------------------
+# Auth constants
+# ---------------------------------------------------------------------------
+
+_LOCKOUT_THRESHOLD: int = 5     # failed attempts before account lockout
+_LOCKOUT_DURATION_SECONDS: int = 900   # 15 minutes
+_ACCESS_TOKEN_TTL_SECONDS: int = 900   # must match security._ACCESS_TOKEN_TTL
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +83,10 @@ async def authenticate_user(
     user = await UserRepository.get_by_email(db, email)
 
     # Step 2 — timing-safe "not found" path (Refinement.md section 2)
-    # verify_password against a real bcrypt hash burns ~250ms to prevent
-    # timing attacks that reveal whether an email exists.
+    # Offload bcrypt to thread pool so the async event loop is not blocked
+    # (~250ms CPU-bound work). asyncio.to_thread runs in the default executor.
     if user is None:
-        verify_password("dummy", get_timing_dummy_hash())
+        await asyncio.to_thread(verify_password, "dummy", get_timing_dummy_hash())
         logger.warning(
             "auth.login.failure",
             extra={"email_domain": email.split("@")[-1], "reason": "INVALID_CREDENTIALS"},
@@ -93,14 +102,15 @@ async def authenticate_user(
         )
         raise LockoutError(user.locked_until)
 
-    # Step 4 — verify password
-    password_ok: bool = verify_password(password, user.password_hash)
+    # Step 4 — verify password (offloaded to thread pool — bcrypt is CPU-bound)
+    password_ok: bool = await asyncio.to_thread(verify_password, password, user.password_hash)
 
     if not password_ok:
-        new_attempts = user.failed_attempts + 1
-        if new_attempts >= 5:
+        # Atomic SQL increment avoids read-modify-write race on concurrent attempts
+        new_attempts = await UserRepository.increment_failed_attempts(db, user.id)
+        if new_attempts >= _LOCKOUT_THRESHOLD:
             lockout_until = datetime.fromtimestamp(
-                now.timestamp() + 900, tz=timezone.utc
+                now.timestamp() + _LOCKOUT_DURATION_SECONDS, tz=timezone.utc
             )
             await UserRepository.set_lockout(db, user.id, new_attempts, lockout_until)
             logger.warning(
@@ -108,16 +118,14 @@ async def authenticate_user(
                 extra={"user_id": str(user.id), "attempts": new_attempts},
             )
             raise LockoutError(lockout_until)
-        else:
-            await UserRepository.increment_failed_attempts(db, user.id, new_attempts)
-            logger.warning(
-                "auth.login.failure",
-                extra={
-                    "email_domain": email.split("@")[-1],
-                    "reason": "INVALID_CREDENTIALS",
-                },
-            )
-            raise AuthError("INVALID_CREDENTIALS")
+        logger.warning(
+            "auth.login.failure",
+            extra={
+                "email_domain": email.split("@")[-1],
+                "reason": "INVALID_CREDENTIALS",
+            },
+        )
+        raise AuthError("INVALID_CREDENTIALS")
 
     # Step 5 — successful authentication: reset lockout state
     await UserRepository.reset_failed_attempts(db, user.id)
@@ -140,7 +148,7 @@ async def authenticate_user(
         access_token=access_token,
         refresh_token=raw_refresh,
         token_type="Bearer",
-        expires_in=900,
+        expires_in=_ACCESS_TOKEN_TTL_SECONDS,
         user=UserInfo(
             id=user.id,
             email=user.email,
@@ -154,15 +162,13 @@ async def authenticate_user(
 async def refresh_access_token(
     db: AsyncSession,
     raw_refresh_token: str,
-) -> str:
+) -> RefreshResponse:
     """
     Token refresh flow — Pseudocode.md Algorithm: refresh_access_token.
 
     Validates the refresh token (JWT signature + DB state), then issues
     a new access token without touching the refresh token itself
     (multi-use until explicitly revoked on logout — Refinement.md edge case #8).
-
-    Returns the raw access token string; the router wraps it in RefreshResponse.
     """
     # Step 1 — validate JWT signature and type claim
     try:
@@ -180,7 +186,11 @@ async def refresh_access_token(
         raise AuthError("INVALID_REFRESH_TOKEN")
 
     now = _now_utc()
-    if stored.expires_at < now:
+    # Normalize expires_at: SQLite returns naive datetimes; PostgreSQL returns aware.
+    expires_at = stored.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < now:
         raise AuthError("INVALID_REFRESH_TOKEN")
 
     # Step 7 — load user (handles deleted-user case — Refinement.md edge case #11)
@@ -192,19 +202,30 @@ async def refresh_access_token(
 
     logger.info("auth.token.refreshed", extra={"user_id": str(user.id)})
 
-    return new_access_token
+    return RefreshResponse(access_token=new_access_token, expires_in=_ACCESS_TOKEN_TTL_SECONDS)
 
 
 async def revoke_refresh_token(
     db: AsyncSession,
     raw_refresh_token: str,
+    current_user_id: UUID,
 ) -> None:
     """
     Logout flow — Pseudocode.md Algorithm: revoke_refresh_token.
 
     Idempotent: silently succeeds if the token is not found in the DB.
+    Ownership check: refuses to revoke a token belonging to a different user,
+    preventing cross-tenant session DoS (Agent 3 review finding M11).
     """
     token_hash = _hash_token(raw_refresh_token)
+    stored = await RefreshTokenRepository.get_by_hash(db, token_hash)
+    if stored is not None and stored.user_id != current_user_id:
+        logger.warning(
+            "auth.logout.ownership_mismatch user_id=%s token_owner=%s",
+            current_user_id,
+            stored.user_id,
+        )
+        return  # silently ignore — do not reveal token existence to wrong user
     await RefreshTokenRepository.revoke(db, token_hash)
 
 

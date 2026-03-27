@@ -5,12 +5,16 @@ Multi-tenant design: every User is scoped to an org_id.
 All queries against users and refresh_tokens MUST filter by org_id
 (either directly or via a JOIN through user.org_id).
 
-Indexes defined here mirror the SQL migration 0001_create_auth_tables.py.
+NOTE: `server_default` values for UUIDs and timestamps use PostgreSQL-specific
+functions (gen_random_uuid(), NOW()). These are defined in the Alembic migration
+for production use. The ORM models rely on Python-side `default=` for both
+PostgreSQL and SQLite (tests).
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
+from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -28,6 +32,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
+def _now_utc() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
 class Organization(Base):
     """
     Top-level tenant unit. Every user and SKU belongs to exactly one org.
@@ -41,15 +49,17 @@ class Organization(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        server_default=text("gen_random_uuid()"),
+        default=uuid4,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    plan: Mapped[str] = mapped_column(String(50), nullable=False, default="basic", server_default="basic")
+    plan: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="basic", server_default="basic"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("NOW()"),
+        default=_now_utc,
     )
 
     # Relationships
@@ -81,7 +91,7 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        server_default=text("gen_random_uuid()"),
+        default=uuid4,
     )
     org_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -109,13 +119,13 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("NOW()"),
+        default=_now_utc,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("NOW()"),
-        onupdate=datetime.utcnow,
+        default=_now_utc,
+        onupdate=lambda: datetime.now(tz=timezone.utc),
     )
 
     # Relationships
@@ -128,7 +138,7 @@ class User(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<User id={self.id} email={self.email!r} role={self.role!r} org_id={self.org_id}>"
+        return f"<User id={self.id} role={self.role!r} org_id={self.org_id}>"
 
 
 class RefreshToken(Base):
@@ -149,7 +159,7 @@ class RefreshToken(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        server_default=text("gen_random_uuid()"),
+        default=uuid4,
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -174,7 +184,7 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("NOW()"),
+        default=_now_utc,
     )
 
     # Relationships

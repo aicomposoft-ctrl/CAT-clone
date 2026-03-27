@@ -61,14 +61,6 @@ class Settings(BaseSettings):
         description="Refresh token lifetime in seconds.",
     )
 
-    # --- Bcrypt (informational — security.py hardcodes cost=12) ---
-    BCRYPT_ROUNDS: int = Field(
-        default=12,
-        ge=10,
-        le=16,
-        description="Bcrypt cost factor. Informational only — security.py hardcodes 12.",
-    )
-
     # --- Runtime ---
     APP_ENV: str = Field(
         default="development",

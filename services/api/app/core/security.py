@@ -132,6 +132,7 @@ def create_access_token(user_id: UUID, org_id: UUID, role: str) -> str:
         "org_id": str(org_id),
         "role": role,
         "type": "access",
+        "jti": str(uuid4()),  # unique per token — prevents replay detection gaps
         "iat": now,
         "exp": now + _ACCESS_TOKEN_TTL,
     }
