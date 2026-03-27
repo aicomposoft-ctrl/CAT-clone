@@ -7,10 +7,13 @@ Partial-row contract: if no content_scores row exists yet for today, this task
 creates one with only stock fields set. Content fields remain NULL.
 ML scoring pipeline MUST filter WHERE collected_description IS NOT NULL.
 
+org_id extracted as a primitive within the first DB session to avoid
+DetachedInstanceError from lazy relationships after session close.
+
 Error handling:
   - NO_NM_ID:    external_id is None → silent skip
   - NOT_FOUND:   product missing → log and return, no write
-  - API_UNAVAILABLE → retry (max 3, exponential backoff)
+  - API_UNAVAILABLE → self.retry() (max 3, exponential backoff), no write on failure
 """
 
 from __future__ import annotations
@@ -43,18 +46,19 @@ def collect_wb_stock(self, sku_platform_id: str) -> None:
         sku_platform_id: UUID string of the sku_platforms row.
     """
     with get_db_session() as db:
-        sp = (
-            db.query(SKUPlatform)
+        row = (
+            db.query(SKUPlatform.id, SKUPlatform.external_id, SKU.org_id)
             .join(SKU, SKU.id == SKUPlatform.sku_id)
             .filter(SKUPlatform.id == uuid.UUID(sku_platform_id))
             .first()
         )
 
-    if sp is None:
+    if row is None:
         logger.warning("collect_wb_stock: sku_platform %s not found — skipping", sku_platform_id)
         return
 
-    nm_id = sp.external_id
+    sp_id, nm_id, org_id = row
+
     if not nm_id:
         logger.info("collect_wb_stock: NO_NM_ID for sku_platform %s — skipping", sku_platform_id)
         return
@@ -68,6 +72,7 @@ def collect_wb_stock(self, sku_platform_id: str) -> None:
             logger.info("collect_wb_stock: product nm_id=%s not found on WB — skipping", nm_id)
             return
         logger.warning("collect_wb_stock: ScraperError code=%s nm_id=%s", exc.code, nm_id)
+        # No DB write on API failure — retry instead
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
 
     today = date.today()
@@ -75,7 +80,7 @@ def collect_wb_stock(self, sku_platform_id: str) -> None:
         existing = (
             db.query(ContentScore)
             .filter(
-                ContentScore.sku_platform_id == sp.id,
+                ContentScore.sku_platform_id == sp_id,
                 ContentScore.scored_at == today,
             )
             .first()
@@ -85,11 +90,12 @@ def collect_wb_stock(self, sku_platform_id: str) -> None:
             existing.in_stock = stock_data.in_stock
             existing.warehouse_qty = stock_data.total_qty
         else:
-            # Partial row: content fields stay NULL until collect_wb_content runs
+            # Partial row: content fields stay NULL until collect_wb_content runs.
+            # ML pipeline must guard: WHERE collected_description IS NOT NULL
             db.add(
                 ContentScore(
                     id=uuid.uuid4(),
-                    sku_platform_id=sp.id,
+                    sku_platform_id=sp_id,
                     scored_at=today,
                     in_stock=stock_data.in_stock,
                     warehouse_qty=stock_data.total_qty,

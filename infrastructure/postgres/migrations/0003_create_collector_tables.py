@@ -58,8 +58,10 @@ def upgrade() -> None:
         sa.Column("promo_label", sa.String(255), nullable=True),
         sa.Column("collected_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
-    op.create_index("idx_price_snapshots_sp", "price_snapshots", ["sku_platform_id"])
-    op.create_index("idx_price_snapshots_collected_at", "price_snapshots", ["collected_at"])
+    # Composite index for time-series queries: WHERE sku_platform_id = ? ORDER BY collected_at DESC
+    op.execute(
+        "CREATE INDEX idx_price_snapshots_sp_time ON price_snapshots (sku_platform_id, collected_at DESC)"
+    )
 
     op.create_table(
         "reviews",
@@ -82,5 +84,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("reviews")
+    op.execute("DROP INDEX IF EXISTS idx_price_snapshots_sp_time")
     op.drop_table("price_snapshots")
     op.drop_table("content_scores")

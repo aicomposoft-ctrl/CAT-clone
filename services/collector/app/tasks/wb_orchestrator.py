@@ -4,15 +4,14 @@ WB orchestrator tasks — dispatch per-SKU tasks for all WB platforms.
 Two orchestrators:
   collect_wb_content_all  — daily at 02:00 UTC
     Dispatches: collect_wb_content + collect_wb_stock + collect_wb_reviews
-    for every active sku_platform WHERE platform.name = "Wildberries"
+    for every active, monitored sku_platform WHERE platform.name = "Wildberries"
 
   collect_wb_prices_all   — every 4 hours
     Dispatches: collect_wb_price
-    for every active sku_platform WHERE platform.name = "Wildberries"
+    for every active, monitored sku_platform WHERE platform.name = "Wildberries"
 
-These tasks are triggered by Celery Beat (configured in docker-compose / beat schedule).
-Each per-SKU task is sent with .delay() and runs independently — orchestrator does not
-wait for individual task completion.
+The orchestrator selects only sku_platform IDs (not full ORM objects) to keep
+memory flat regardless of catalog size. Full ORM objects fetched per task.
 """
 
 from __future__ import annotations
@@ -32,17 +31,22 @@ logger = logging.getLogger(__name__)
 _WB_PLATFORM_NAME = "Wildberries"
 
 
-def _load_wb_sku_platforms(db) -> list[SKUPlatform]:
-    """Load all monitored WB sku_platforms via a single JOIN query."""
-    return (
-        db.query(SKUPlatform)
+def _load_wb_sku_platform_ids(db) -> list[str]:
+    """
+    Return UUID strings of all active, monitored WB sku_platforms.
+    Selects only the ID column to keep memory flat.
+    """
+    rows = (
+        db.query(SKUPlatform.id)
         .join(Platform, Platform.id == SKUPlatform.platform_id)
         .filter(
             Platform.name == _WB_PLATFORM_NAME,
+            Platform.is_active.is_(True),
             SKUPlatform.is_monitored.is_(True),
         )
         .all()
     )
+    return [str(row.id) for row in rows]
 
 
 @celery_app.task(name="wb.collect_content_all")
@@ -52,8 +56,7 @@ def collect_wb_content_all() -> None:
     Runs at 02:00 UTC via Celery Beat.
     """
     with get_db_session() as db:
-        sku_platforms = _load_wb_sku_platforms(db)
-        sp_ids = [str(sp.id) for sp in sku_platforms]
+        sp_ids = _load_wb_sku_platform_ids(db)
 
     logger.info("collect_wb_content_all: dispatching %d WB sku_platforms", len(sp_ids))
 
@@ -72,8 +75,7 @@ def collect_wb_prices_all() -> None:
     Runs at 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC via Celery Beat.
     """
     with get_db_session() as db:
-        sku_platforms = _load_wb_sku_platforms(db)
-        sp_ids = [str(sp.id) for sp in sku_platforms]
+        sp_ids = _load_wb_sku_platform_ids(db)
 
     logger.info("collect_wb_prices_all: dispatching %d WB sku_platforms", len(sp_ids))
 

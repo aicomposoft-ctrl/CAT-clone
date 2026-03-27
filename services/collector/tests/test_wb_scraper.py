@@ -350,3 +350,76 @@ async def test_scraper_raises_api_unavailable_on_5xx(scraper, respx_mock):
     with pytest.raises(ScraperError) as exc_info:
         await scraper.collect_content(FIXTURE_NM_ID)
     assert exc_info.value.code == "API_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_scraper_raises_parse_error_on_null_data(scraper, respx_mock):
+    """Spec error code PARSE_ERROR: API returns valid JSON but unexpected structure."""
+    respx_mock.get("https://card.wb.ru/cards/v2/detail").mock(
+        return_value=httpx.Response(200, json={"data": None})
+    )
+    with pytest.raises(ScraperError) as exc_info:
+        await scraper.collect_content(FIXTURE_NM_ID)
+    assert exc_info.value.code == "PARSE_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_collect_price_empty_sizes_returns_zero(scraper, respx_mock):
+    """No sizes list → price=0, discount_pct=0."""
+    empty_sizes_card = {
+        "data": {
+            "products": [{"id": 12345678, "name": "Product", "sizes": []}]
+        }
+    }
+    respx_mock.get("https://card.wb.ru/cards/v2/detail").mock(
+        return_value=httpx.Response(200, json=empty_sizes_card)
+    )
+    price_data = await scraper.collect_price(FIXTURE_NM_ID)
+    assert price_data.price == Decimal("0.00")
+    assert price_data.discount_pct == Decimal("0.00")
+
+
+@pytest.mark.asyncio
+async def test_collect_stock_empty_sizes_out_of_stock(scraper, respx_mock):
+    """No sizes → in_stock=False, total_qty=0."""
+    empty_sizes_card = {
+        "data": {
+            "products": [{"id": 12345678, "name": "Product", "sizes": []}]
+        }
+    }
+    respx_mock.get("https://card.wb.ru/cards/v2/detail").mock(
+        return_value=httpx.Response(200, json=empty_sizes_card)
+    )
+    stock_data = await scraper.collect_stock(FIXTURE_NM_ID)
+    assert stock_data.in_stock is False
+    assert stock_data.total_qty == 0
+
+
+def test_build_image_url_non_numeric_raises_parse_error():
+    """Non-numeric nm_id must raise ScraperError(PARSE_ERROR), not ValueError."""
+    with pytest.raises(ScraperError) as exc_info:
+        _build_image_url("not-a-number")
+    assert exc_info.value.code == "PARSE_ERROR"
+
+
+def test_wb_image_cdn_re_rejects_one_digit_basket():
+    """Basket number must be exactly 2 digits (\\d{2})."""
+    url = "https://basket-1.wbbasket.ru/vol123/part12345/12345678/images/big/1.jpg"
+    assert not _WB_IMAGE_CDN_RE.match(url)
+
+
+def test_scraper_rate_limited_retry_count(scraper, respx_mock):
+    """RATE_LIMITED exhaustion must make exactly max_retries attempts."""
+    import asyncio
+
+    call_count = [0]
+
+    def handler(request):
+        call_count[0] += 1
+        return httpx.Response(429)
+
+    respx_mock.get("https://card.wb.ru/cards/v2/detail").mock(side_effect=handler)
+    with pytest.raises(ScraperError) as exc_info:
+        asyncio.get_event_loop().run_until_complete(scraper.collect_content(FIXTURE_NM_ID))
+    assert exc_info.value.code == "RATE_LIMITED"
+    assert call_count[0] == 3  # max_retries=3

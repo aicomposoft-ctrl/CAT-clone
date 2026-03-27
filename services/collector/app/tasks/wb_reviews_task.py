@@ -2,14 +2,16 @@
 Celery task: collect reviews for a Wildberries SKU.
 
 Fetches the 50 most recent reviews from WB feedbacks API.
-Uses INSERT ON CONFLICT DO NOTHING (via uq_reviews_sp_ext_id) for deduplication.
+Uses a single bulk INSERT ON CONFLICT DO NOTHING for deduplication
+(constraint: uq_reviews_sp_ext_id).
 
-Runs daily alongside the content task from the orchestrator.
+org_id extracted as a primitive within the first DB session to avoid
+DetachedInstanceError from lazy relationships after session close.
 
 Error handling:
   - NO_NM_ID: external_id is None → silent skip
   - NOT_FOUND: product missing → log and return, 0 rows written
-  - ScraperError → retry (max 3, exponential backoff)
+  - ScraperError → self.retry() (max 3, exponential backoff)
 """
 
 from __future__ import annotations
@@ -44,18 +46,19 @@ def collect_wb_reviews(self, sku_platform_id: str) -> None:
         sku_platform_id: UUID string of the sku_platforms row.
     """
     with get_db_session() as db:
-        sp = (
-            db.query(SKUPlatform)
+        row = (
+            db.query(SKUPlatform.id, SKUPlatform.external_id, SKU.org_id)
             .join(SKU, SKU.id == SKUPlatform.sku_id)
             .filter(SKUPlatform.id == uuid.UUID(sku_platform_id))
             .first()
         )
 
-    if sp is None:
+    if row is None:
         logger.warning("collect_wb_reviews: sku_platform %s not found — skipping", sku_platform_id)
         return
 
-    nm_id = sp.external_id
+    sp_id, nm_id, org_id = row
+
     if not nm_id:
         logger.info("collect_wb_reviews: NO_NM_ID for sku_platform %s — skipping", sku_platform_id)
         return
@@ -76,21 +79,25 @@ def collect_wb_reviews(self, sku_platform_id: str) -> None:
         return
 
     now = datetime.now(tz=timezone.utc)
+    values = [
+        {
+            "id": uuid.uuid4(),
+            "sku_platform_id": sp_id,
+            "external_review_id": review.external_review_id,
+            "review_text": review.review_text,
+            "rating": review.rating,
+            "review_date": review.review_date,
+            "collected_at": now,
+        }
+        for review in reviews
+    ]
+
     with get_db_session() as db:
-        for review in reviews:
-            stmt = (
-                pg_insert(Review)
-                .values(
-                    id=uuid.uuid4(),
-                    sku_platform_id=sp.id,
-                    external_review_id=review.external_review_id,
-                    review_text=review.review_text,
-                    rating=review.rating,
-                    review_date=review.review_date,
-                    collected_at=now,
-                )
-                .on_conflict_do_nothing(constraint="uq_reviews_sp_ext_id")
-            )
-            db.execute(stmt)
+        stmt = (
+            pg_insert(Review)
+            .values(values)
+            .on_conflict_do_nothing(constraint="uq_reviews_sp_ext_id")
+        )
+        db.execute(stmt)
 
     logger.info("collect_wb_reviews: done nm_id=%s count=%d", nm_id, len(reviews))
