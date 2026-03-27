@@ -158,6 +158,33 @@ Before debugging any issue: `grep -r "KEYWORD" myinsights/` first.
 
 Key insights captured so far: _none yet — start building your knowledge base with `/myinsights`_
 
+## Toolkit Artifacts
+
+Extracted via `/harvest` — reusable artifacts from this project.
+
+### Patterns
+| Pattern | Maturity | Description | Source |
+|---------|----------|-------------|--------|
+| multi-tenant-saas-isolation | 🔴 Alpha | org_id filtering + RLS for SaaS DB isolation | CAT, 2026-03-27 |
+| fastapi-domain-driven-layering | 🔴 Alpha | Router/Service/Repository separation for FastAPI | CAT, 2026-03-27 |
+| cache-aside-expensive-computations | 🔴 Alpha | Redis cache-aside for ML inference and slow ops | CAT, 2026-03-27 |
+
+### Snippets
+| Snippet | Maturity | Description | Source |
+|---------|----------|-------------|--------|
+| startup-secrets-validation.py | 🔴 Alpha | Fail-fast env var validation at app startup | CAT, 2026-03-27 |
+| async-retry-exponential-backoff.py | 🔴 Alpha | Async decorator for retry with exponential backoff | CAT, 2026-03-27 |
+| excel-bytesio-streaming.py | 🔴 Alpha | Excel report generation without disk I/O | CAT, 2026-03-27 |
+| pytest-async-db-rollback-fixture.py | 🔴 Alpha | Per-test DB rollback fixture for async SQLAlchemy | CAT, 2026-03-27 |
+| sliding-window-rate-limiter-redis.py | 🔴 Alpha | Distributed rate limiter using Redis sorted sets | CAT, 2026-03-27 |
+
+### Templates
+| Template | Maturity | Description | Source |
+|----------|----------|-------------|--------|
+| python-node-docker.gitignore | 🔴 Alpha | Comprehensive .gitignore for Python+Node+Docker+ML | CAT, 2026-03-27 |
+
+Last harvest: 2026-03-27 | Total artifacts: 9 | Report: `docs/harvest-report-2026-03-27.md`
+
 ## Feature Development Lifecycle
 
 ```

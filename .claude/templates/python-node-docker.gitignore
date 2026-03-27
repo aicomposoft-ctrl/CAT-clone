@@ -1,0 +1,135 @@
+# Template: .gitignore for Python + Node.js + Docker projects
+# Category: Template
+# Maturity: 🔴 Alpha | Extracted: 2026-03-27 from CAT project
+# Tech stack: Python 3.x, Node.js/npm, Docker, ML (HuggingFace)
+# Parameterizable: YES — remove sections not applicable to your stack
+#
+# Usage: cp this file to project root as .gitignore
+
+# ─── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+*.pyo
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ─── Secrets & Environment ─────────────────────────────────
+.env
+.env.*
+!.env.example       # keep the template, never the real values
+*.pem
+*.key
+secrets/
+credentials/
+
+# ─── Node.js ───────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+dist/
+build/
+.next/
+.nuxt/
+.output/
+.cache/
+*.tsbuildinfo
+
+# ─── Docker / Infrastructure ───────────────────────────────
+# Local data volumes (never commit DB data)
+postgres_data/
+redis_data/
+clickhouse_data/
+minio_data/
+volumes/
+
+# ─── ML Models & Large Binaries ────────────────────────────
+# HuggingFace cache (models download on first use)
+.cache/huggingface/
+~/.cache/huggingface/
+models/
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# ─── IDE & OS ──────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# ─── Logs ──────────────────────────────────────────────────
+*.log
+logs/
+*.out
+
+# ─── Test & Coverage ───────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+coverage/
+*.lcov
+
+# ─── Temporary files ───────────────────────────────────────
+*.tmp
+*.temp
+tmp/
+temp/
