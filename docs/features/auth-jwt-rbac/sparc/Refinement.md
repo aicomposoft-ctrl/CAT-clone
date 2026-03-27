@@ -51,11 +51,16 @@
 - This prevents timing-based user enumeration
 
 ```python
-DUMMY_HASH = "$2b$12$dummy.hash.to.prevent.timing.attacks.xxxxxx"
+# Generate once at module load time (real bcrypt hash, not a string literal):
+# bcrypt.hashpw(b"_dummy_timing_guard_", bcrypt.gensalt(12)).decode()
+# Example output (re-generate — do not hardcode this value):
+DUMMY_HASH = passlib.hash.bcrypt.hash("_dummy_timing_guard_")
 
 if user is None:
-    verify_password("dummy", DUMMY_HASH)  # waste same time
+    verify_password("dummy", DUMMY_HASH)  # waste ~250ms to prevent timing attack
     raise AuthError("INVALID_CREDENTIALS")
+# IMPORTANT: DUMMY_HASH must be a VALID bcrypt hash (cost=12).
+# A fake string will NOT take 250ms and leaks user existence via timing.
 ```
 
 ---

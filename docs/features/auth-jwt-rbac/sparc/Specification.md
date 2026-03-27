@@ -254,6 +254,39 @@ Feature: Authentication and Authorization
     Given no Authorization header is provided
     When I GET /api/v1/auth/me
     Then response status is 401
+
+  Scenario: Explicit logout revokes refresh token
+    Given I am logged in and have valid access_token and refresh_token
+    When I POST /api/v1/auth/logout with the refresh_token
+    Then response status is 200
+    And response.message equals "Logged out successfully"
+    When I POST /api/v1/auth/refresh with the same refresh_token
+    Then response status is 401
+    And response.detail equals "INVALID_REFRESH_TOKEN"
+
+  Scenario: Invalid email format returns 422
+    When I POST /api/v1/auth/login with {"email": "not-an-email", "password": "password123"}
+    Then response status is 422
+    And response.detail contains validation error for "email" field
+
+  Scenario: Rate limit exceeded on login returns 429
+    When I POST /api/v1/auth/login more than 10 times within 60 seconds from same IP
+    Then response status is 429
+    And response.detail equals "TOO_MANY_REQUESTS"
+
+  Scenario: Login with nonexistent email returns same error as wrong password
+    When I POST /api/v1/auth/login with {"email": "nobody@fake.com", "password": "anything"}
+    Then response status is 401
+    And response.detail equals "INVALID_CREDENTIALS"
+    # Note: same response as wrong password — prevents user enumeration via timing
+
+  Scenario: Token refresh does not rotate the refresh token (multi-use until expiry)
+    Given I have a valid refresh_token
+    When I POST /api/v1/auth/refresh with that refresh_token
+    Then response status is 200
+    And I can POST /api/v1/auth/refresh again with the SAME refresh_token
+    And response status is 200
+    # Refresh token is NOT rotated — remains valid until 7-day expiry or explicit logout
 ```
 
 ---
