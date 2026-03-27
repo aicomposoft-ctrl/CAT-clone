@@ -60,6 +60,35 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | [DEVELOPMENT_GUIDE.md](DEVELOPMENT_GUIDE.md) | Developer handbook |
 | [CLAUDE.md](CLAUDE.md) | Claude Code toolkit reference |
 
+## Feature Roadmap
+
+| # | Feature | Priority | Sprint | SP | Status |
+|---|---------|----------|--------|----|--------|
+| 1 | Auth (JWT + RBAC) | P0 | 1 | 5 | ✅ Done |
+| 2 | SKU CRUD + bulk upload | P0 | 1 | 8 | 🔲 Next |
+| 3 | Reference upload (S3) | P0 | 1 | 5 | 🔲 |
+| 4 | WB scraper | P0 | 2 | 13 | 🔲 |
+| 5 | Ozon scraper | P0 | 2 | 13 | 🔲 |
+| 6 | Самокат scraper | P0 | 2 | 8 | 🔲 |
+| 7 | Лента scraper | P0 | 2 | 8 | 🔲 |
+| 8 | Content scoring (image) | P0 | 3 | 13 | 🔲 |
+| 9 | Content scoring (text) | P0 | 3 | 8 | 🔲 |
+| 10 | Stock plan upload | P0 | 3 | 5 | 🔲 |
+| 11 | Distribution dashboard | P0 | 4 | 13 | 🔲 |
+| 12 | Excel Export (Content) | P0 | 4 | 8 | 🔲 |
+| 13 | Excel Export (Stock) | P0 | 4 | 8 | 🔲 |
+| 14 | Email alerts | P0 | 5 | 8 | 🔲 |
+| 15 | Price monitoring | P1 | 6 | 13 | 🔲 |
+| 16 | Reviews NLP | P1 | 7 | 13 | 🔲 |
+| 17 | Excel Export (Reviews) | P1 | 7 | 5 | 🔲 |
+| 18 | Web Dashboard | P1 | 8 | 21 | 🔲 |
+| 19 | API public endpoints | P1 | 9 | 13 | 🔲 |
+| 20 | Multi-client support | P1 | 10 | 13 | 🔲 |
+
+**Sprint 1 remaining:** SKU CRUD + bulk upload · Reference upload (S3)
+
+To implement next: `/feature SKU CRUD`
+
 ## License
 
 Proprietary — all rights reserved.
