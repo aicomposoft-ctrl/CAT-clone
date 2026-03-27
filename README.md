@@ -65,10 +65,10 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | # | Feature | Priority | Sprint | SP | Status |
 |---|---------|----------|--------|----|--------|
 | 1 | Auth (JWT + RBAC) | P0 | 1 | 5 | ✅ Done |
-| 2 | SKU CRUD + bulk upload | P0 | 1 | 8 | 🔲 Next |
-| 3 | Reference upload (S3) | P0 | 1 | 5 | 🔲 |
-| 4 | WB scraper | P0 | 2 | 13 | 🔲 |
-| 5 | Ozon scraper | P0 | 2 | 13 | 🔲 |
+| 2 | SKU CRUD + bulk upload | P0 | 1 | 8 | ✅ Done |
+| 3 | Reference upload (S3) | P0 | 1 | 5 | ✅ Done |
+| 4 | WB scraper | P0 | 2 | 13 | ✅ Done |
+| 5 | Ozon scraper | P0 | 2 | 13 | 🔲 Next |
 | 6 | Самокат scraper | P0 | 2 | 8 | 🔲 |
 | 7 | Лента scraper | P0 | 2 | 8 | 🔲 |
 | 8 | Content scoring (image) | P0 | 3 | 13 | 🔲 |
@@ -85,9 +85,10 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | 19 | API public endpoints | P1 | 9 | 13 | 🔲 |
 | 20 | Multi-client support | P1 | 10 | 13 | 🔲 |
 
-**Sprint 1 remaining:** SKU CRUD + bulk upload · Reference upload (S3)
+**Sprint 1:** Полностью завершён ✅ (Auth · SKU CRUD · Reference Upload S3)
+**Sprint 2 remaining:** Ozon scraper · Самокат scraper · Лента scraper
 
-To implement next: `/feature SKU CRUD`
+To implement next: `/feature ozon-scraper`
 
 ## License
 
