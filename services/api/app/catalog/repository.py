@@ -247,12 +247,16 @@ class SKUPlatformRepository:
 
     @staticmethod
     async def get_by_sku_platform(
-        db: AsyncSession, sku_id: UUID, platform_id: UUID
+        db: AsyncSession, sku_id: UUID, platform_id: UUID, org_id: UUID
     ) -> Optional[SKUPlatform]:
+        """Return a SKUPlatform only if it belongs to the given org (join-through isolation)."""
         result = await db.execute(
-            select(SKUPlatform).where(
+            select(SKUPlatform)
+            .join(SKU, SKU.id == SKUPlatform.sku_id)
+            .where(
                 SKUPlatform.sku_id == sku_id,
                 SKUPlatform.platform_id == platform_id,
+                SKU.org_id == org_id,
             )
         )
         return result.scalar_one_or_none()

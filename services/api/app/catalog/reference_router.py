@@ -66,7 +66,15 @@ async def upload_reference_image(
 
     Returns a presigned URL for immediate viewing and enqueues CLIP embedding computation.
     """
-    content = await file.read()
+    # Read with a hard cap before any processing to prevent DoS via large uploads.
+    # Nginx also enforces client_max_body_size; this is defence-in-depth.
+    _MAX_BYTES = 10 * 1024 * 1024 + 1  # 10 MB + 1 to detect over-limit
+    content = await file.read(_MAX_BYTES)
+    if len(content) == _MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="FILE_TOO_LARGE",
+        )
     try:
         return await reference_service.upload_reference_image(
             db,

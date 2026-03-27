@@ -199,13 +199,21 @@ def upgrade() -> None:
         sa.UniqueConstraint("sku_id", "platform_id", name="uq_sku_platforms_sku_platform"),
     )
     op.create_index("idx_sku_platforms_sku", "sku_platforms", ["sku_id"])
+    # Supports queries filtering/joining by platform (e.g. orchestrator: all WB platforms)
+    op.create_index("idx_sku_platforms_platform", "sku_platforms", ["platform_id"])
+    # Composite index for cursor pagination: ORDER BY (created_at DESC, id DESC) WHERE org_id = ?
+    op.execute(
+        "CREATE INDEX idx_skus_org_cursor ON skus (org_id, created_at DESC, id DESC)"
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("idx_sku_platforms_platform", table_name="sku_platforms")
     op.drop_index("idx_sku_platforms_sku", table_name="sku_platforms")
     op.drop_table("sku_platforms")
 
     op.execute("DROP INDEX IF EXISTS uq_skus_org_article")
+    op.execute("DROP INDEX IF EXISTS idx_skus_org_cursor")
     op.drop_index("idx_skus_active", table_name="skus")
     op.drop_index("idx_skus_brand_id", table_name="skus")
     op.drop_index("idx_skus_org_id", table_name="skus")

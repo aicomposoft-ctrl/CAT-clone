@@ -32,26 +32,26 @@ logger = logging.getLogger(__name__)
 _EMBEDDING_TTL = 2592000  # 30 days in seconds
 
 
-def _get_redis():
-    """Return a Redis client. Returns None if REDIS_URL is not configured (tests)."""
+async def _get_redis():
+    """Return an async Redis client. Returns None if REDIS_URL is not configured."""
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
         return None
     try:
-        import redis as redis_lib
-        return redis_lib.from_url(redis_url, decode_responses=False)
+        from redis.asyncio import from_url as async_redis_from_url
+        return await async_redis_from_url(redis_url, decode_responses=False)
     except Exception as exc:
         logger.warning("Redis unavailable: %s", exc)
         return None
 
 
-def _invalidate_embedding(redis_client, sku_id: UUID, *fields: str) -> None:
+async def _invalidate_embedding(redis_client, sku_id: UUID, *fields: str) -> None:
     """Delete embedding cache keys for a SKU. Silent on Redis failure."""
     if redis_client is None:
         return
     try:
         keys = [f"ref_emb:{sku_id}:{field}" for field in fields]
-        redis_client.delete(*keys)
+        await redis_client.delete(*keys)
     except Exception as exc:
         logger.warning("Redis delete failed for sku %s fields %s: %s", sku_id, fields, exc)
 
@@ -96,10 +96,10 @@ async def upload_reference_image(
     ext, mime = minio.validate_image(content, filename, content_type)
 
     # 3. Delete old S3 object and invalidate cached embedding if replacing
-    redis = _get_redis()
+    redis = await _get_redis()
     if sku.reference_image_url is not None:
         await minio.delete(sku.reference_image_url, org_id=org_id)
-        _invalidate_embedding(redis, sku_id, "image")
+        await _invalidate_embedding(redis, sku_id, "image")
 
     # 4. Upload new image
     s3_key = MinioClient.make_s3_key(org_id, sku_id, ext)
@@ -150,8 +150,8 @@ async def upload_reference_text(
         return ReferenceTextUploadResponse(sku_id=sku_id, embedding_task_ids={})
 
     # 2. Invalidate stale embeddings before DB update
-    redis = _get_redis()
-    _invalidate_embedding(redis, sku_id, *fields_to_invalidate)
+    redis = await _get_redis()
+    await _invalidate_embedding(redis, sku_id, *fields_to_invalidate)
 
     # 3. Persist to DB and flush before Celery dispatch
     await SKURepository.update(db, sku, **updates)

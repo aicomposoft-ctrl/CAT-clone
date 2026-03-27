@@ -297,7 +297,7 @@ async def create_sku_platform(
     if platform is None or not platform.is_active:
         raise LookupError("PLATFORM_NOT_FOUND")
 
-    existing = await SKUPlatformRepository.get_by_sku_platform(db, data.sku_id, data.platform_id)
+    existing = await SKUPlatformRepository.get_by_sku_platform(db, data.sku_id, data.platform_id, org_id)
     if existing is not None:
         raise ValueError("SKU_PLATFORM_DUPLICATE")
 

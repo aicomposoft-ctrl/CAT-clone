@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
@@ -37,7 +36,7 @@ def _validate_image_magic(content: bytes, ext: str) -> bool:
     if ext in {".jpg", ".jpeg"}:
         return content[:3] == b"\xff\xd8\xff"
     if ext == ".png":
-        return content[:4] == b"\x89PNG"
+        return len(content) >= 8 and content[:8] == b"\x89PNG\r\n\x1a\n"
     if ext == ".webp":
         return len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
     return False
@@ -131,19 +130,18 @@ class MinioClient:
             logger.error("MinIO upload failed for key %s: %s", s3_key, exc)
             raise RuntimeError("S3_UPLOAD_FAILED") from exc
 
-    async def delete(self, s3_key: str, org_id: Optional[UUID] = None) -> None:
+    async def delete(self, s3_key: str, org_id: UUID) -> None:
         """
         Delete an object from MinIO.
 
-        org_id guard: if provided, asserts the key belongs to that org's prefix
-        to prevent accidental cross-org deletion.
+        org_id is required — asserts the key belongs to that org's prefix to
+        prevent accidental cross-org deletion. Callers must always pass org_id.
         """
-        if org_id is not None:
-            expected_prefix = f"org/{org_id}/"
-            if not s3_key.startswith(expected_prefix):
-                raise PermissionError(
-                    f"S3 key {s3_key!r} does not belong to org {org_id} — deletion refused"
-                )
+        expected_prefix = f"org/{org_id}/"
+        if not s3_key.startswith(expected_prefix):
+            raise PermissionError(
+                f"S3 key {s3_key!r} does not belong to org {org_id} — deletion refused"
+            )
         try:
             async with self._make_client() as s3:
                 await s3.delete_object(Bucket=self.BUCKET, Key=s3_key)
