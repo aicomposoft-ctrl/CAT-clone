@@ -119,7 +119,7 @@ async def _download_image_async(url: str, proxy: str | None) -> bytes:
 class SamokatScraper(BaseScraper):
     """Scraper for Samokat darkstore using the mobile REST API (/v2/items)."""
 
-    platform = "Samocat"
+    platform = "Samokat"
     rate_limit = 2.0  # req/sec — permissive darkstore API
 
     _BASE_API = "https://api.samokat.ru/v2"
@@ -259,13 +259,6 @@ class SamokatScraper(BaseScraper):
             resp = await self._get(url, params=params, headers=self._HEADERS)
             if resp.status_code == 404:
                 return None  # sentinel — product has no reviews endpoint
-            if resp.status_code in (429, 403):
-                resp.raise_for_status()
-            if resp.status_code >= 500:
-                raise ScraperError(
-                    "API_UNAVAILABLE",
-                    f"Samokat reviews API returned HTTP {resp.status_code}",
-                )
             resp.raise_for_status()
             return resp.json()
 
@@ -289,17 +282,8 @@ class SamokatScraper(BaseScraper):
                 continue  # skip reviews without an ID — cannot deduplicate
 
             text = sanitize(fb.get("text") or "", 5000)
-
-            try:
-                rating = max(1, min(5, int(fb.get("rating", 5))))
-            except (TypeError, ValueError):
-                rating = 5
-
-            date_str = (fb.get("createdAt") or "")[:10]
-            try:
-                review_date = date.fromisoformat(date_str)
-            except ValueError:
-                review_date = date.today()
+            rating = _parse_rating(fb.get("rating", 5))
+            review_date = _parse_review_date(fb.get("createdAt"))
 
             result.append(ReviewData(
                 external_review_id=external_id,
@@ -333,20 +317,10 @@ class SamokatScraper(BaseScraper):
                     "NOT_FOUND",
                     f"product_id={product_id} not found",
                 )
-            # Treat 429 and 403 as rate-limited — raise_for_status lets
-            # with_retry() handle exponential backoff
-            if resp.status_code in (429, 403):
-                resp.raise_for_status()
-            if resp.status_code >= 500:
-                raise ScraperError(
-                    "API_UNAVAILABLE",
-                    f"Samokat API returned HTTP {resp.status_code}",
-                )
-            if resp.status_code != 200:
-                raise ScraperError(
-                    "API_UNAVAILABLE",
-                    f"Unexpected HTTP status {resp.status_code}",
-                )
+            # raise_for_status() raises httpx.HTTPStatusError for any non-2xx
+            # response — with_retry() catches that and retries 429/5xx with
+            # exponential backoff before raising ScraperError.
+            resp.raise_for_status()
             return resp.json()
 
         try:

@@ -108,7 +108,8 @@ def collect_samocat_stock(self, sku_platform_id: str) -> None:
         # No DB write on API failure — retry instead
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
 
-    today = datetime.now(tz=timezone.utc).date()
+    now_utc = datetime.now(tz=timezone.utc)
+    today = now_utc.date()
     with get_db_session() as db:
         # Partial-row upsert: set_ includes ONLY stock fields.
         # Content fields are intentionally absent from set_ so they are never
@@ -121,7 +122,7 @@ def collect_samocat_stock(self, sku_platform_id: str) -> None:
                 scored_at=today,
                 in_stock=stock_data.in_stock,
                 warehouse_qty=stock_data.total_qty,
-                created_at=datetime.now(tz=timezone.utc),
+                created_at=now_utc,
             )
             .on_conflict_do_update(
                 constraint="uq_content_scores_sp_date",

@@ -41,7 +41,7 @@ from app.celery_app import celery_app
 from app.core.base_scraper import ScraperError
 from app.core.proxy import get_proxy_rotator
 from app.models import ContentScore, SKUPlatform, SKU
-from app.scrapers.samocat import SamokatScraper, _SK_IMAGE_CDN_RE, _download_image_async, _parse_product_id
+from app.scrapers.samocat import SamokatScraper, _download_image_async, _parse_product_id
 from app.tasks._db import get_db_session
 
 logger = logging.getLogger(__name__)
@@ -109,8 +109,20 @@ def collect_samocat_content(self, sku_platform_id: str) -> None:
 
     scraper = SamokatScraper(proxy_rotator=get_proxy_rotator())
 
+    async def _fetch_content_and_image():
+        """Single event loop for content fetch + image download (avoids two asyncio.run calls)."""
+        c = await scraper.collect_content(product_id)
+        # ScraperError from collect_content propagates out — do not catch here.
+        img: bytes | None = None
+        if c.image_url:
+            try:
+                img = await _download_image_async(c.image_url, get_proxy_rotator().next())
+            except Exception:  # noqa: BLE001
+                pass  # failure logged below after asyncio.run returns
+        return c, img
+
     try:
-        content = asyncio.run(scraper.collect_content(product_id))
+        content, image_bytes = asyncio.run(_fetch_content_and_image())
     except ScraperError as exc:
         if exc.code == "NOT_FOUND":
             logger.info(
@@ -125,26 +137,23 @@ def collect_samocat_content(self, sku_platform_id: str) -> None:
         )
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
 
-    # Download main image and upload to MinIO — non-fatal if this fails
+    # Upload image to MinIO — non-fatal if this fails
     s3_key: str | None = None
-    if content.image_url and _SK_IMAGE_CDN_RE.match(content.image_url):
+    if image_bytes is not None:
         try:
-            proxy = get_proxy_rotator().next()
-            image_bytes = asyncio.run(_download_image_async(content.image_url, proxy))
             s3_key = f"org/{org_id}/sku/{sku_id}/samocat/main.jpg"
             minio = _get_minio()
             minio.upload(s3_key, image_bytes, "image/jpeg")
         except Exception:  # noqa: BLE001
             logger.warning(
-                "collect_samocat_content: image download/upload failed for sku_platform=%s",
+                "collect_samocat_content: MinIO upload failed for sku_platform=%s",
                 sku_platform_id,
+                exc_info=True,
             )
             s3_key = None
     elif content.image_url:
-        # URL was present but failed the SSRF allowlist — log without the URL value
-        # (untrusted scraped data should not be written to logs)
         logger.warning(
-            "collect_samocat_content: image URL failed SSRF allowlist for sku_platform=%s",
+            "collect_samocat_content: image download failed for sku_platform=%s",
             sku_platform_id,
         )
 

@@ -80,11 +80,15 @@ def collect_samocat_content_all() -> None:
         "collect_samocat_content_all: dispatching %d Samocat sku_platforms", len(sp_ids)
     )
 
-    for sp_id in sp_ids:
+    if sp_ids:
         group(
-            collect_samocat_content.s(sp_id),
-            collect_samocat_stock.s(sp_id),
-            collect_samocat_reviews.s(sp_id),
+            task
+            for sp_id in sp_ids
+            for task in (
+                collect_samocat_content.s(sp_id),
+                collect_samocat_stock.s(sp_id),
+                collect_samocat_reviews.s(sp_id),
+            )
         ).delay()
 
     logger.info("collect_samocat_content_all: dispatched 3×%d tasks", len(sp_ids))
@@ -104,7 +108,7 @@ def collect_samocat_prices_all() -> None:
         "collect_samocat_prices_all: dispatching %d Samocat sku_platforms", len(sp_ids)
     )
 
-    for sp_id in sp_ids:
-        collect_samocat_price.delay(sp_id)
+    if sp_ids:
+        group(collect_samocat_price.s(sp_id) for sp_id in sp_ids).delay()
 
     logger.info("collect_samocat_prices_all: dispatched %d price tasks", len(sp_ids))

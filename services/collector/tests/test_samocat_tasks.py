@@ -183,7 +183,7 @@ class TestCollectSamokatContent:
             patch("app.tasks.samocat_content_task.SamokatScraper"),
             patch(
                 "app.tasks.samocat_content_task.asyncio.run",
-                return_value=_make_content(),
+                return_value=(_make_content(), b"fake_image"),
             ),
             patch("app.tasks.samocat_content_task._get_minio"),
             patch("app.tasks.samocat_content_task.get_proxy_rotator"),
@@ -208,7 +208,7 @@ class TestCollectSamokatContent:
             patch("app.tasks.samocat_content_task.SamokatScraper"),
             patch(
                 "app.tasks.samocat_content_task.asyncio.run",
-                return_value=_make_content(_VALID_IMAGE_URL),
+                return_value=(_make_content(_VALID_IMAGE_URL), b"fake_image"),
             ),
             patch("app.tasks.samocat_content_task._get_minio"),
             patch("app.tasks.samocat_content_task.get_proxy_rotator"),
@@ -319,7 +319,8 @@ class TestCollectSamokatContent:
         row = _make_row4()
         factory, db2 = _make_two_db_cms(row)
 
-        # Return content with an internal / non-CDN image URL
+        # Return content with an internal / non-CDN image URL; _download_image_async
+        # raises ValueError inside _fetch_content_and_image so image_bytes is None.
         bad_content = _make_content(image_url=_SSRF_IMAGE_URL)
 
         with (
@@ -329,7 +330,7 @@ class TestCollectSamokatContent:
             patch("app.tasks.samocat_content_task.SamokatScraper"),
             patch(
                 "app.tasks.samocat_content_task.asyncio.run",
-                return_value=bad_content,
+                return_value=(bad_content, None),
             ),
             patch("app.tasks.samocat_content_task._get_minio"),
             patch("app.tasks.samocat_content_task.get_proxy_rotator"),
@@ -352,21 +353,25 @@ class TestCollectSamokatContent:
         row = _make_row4()
         factory, db2 = _make_two_db_cms(row)
 
-        call_count = [0]
+        def fake_minio_upload(*args, **kwargs):
+            raise OSError("MinIO unreachable")
 
-        def fake_run(coro):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return _make_content(_VALID_IMAGE_URL)  # scrape succeeds
-            raise OSError("MinIO unreachable")  # image download/upload fails
+        mock_minio_instance = MagicMock()
+        mock_minio_instance.upload.side_effect = fake_minio_upload
 
         with (
             patch(
                 "app.tasks.samocat_content_task.get_db_session", side_effect=factory
             ),
             patch("app.tasks.samocat_content_task.SamokatScraper"),
-            patch("app.tasks.samocat_content_task.asyncio.run", side_effect=fake_run),
-            patch("app.tasks.samocat_content_task._get_minio"),
+            patch(
+                "app.tasks.samocat_content_task.asyncio.run",
+                return_value=(_make_content(_VALID_IMAGE_URL), b"fake_image"),
+            ),
+            patch(
+                "app.tasks.samocat_content_task._get_minio",
+                return_value=mock_minio_instance,
+            ),
             patch("app.tasks.samocat_content_task.get_proxy_rotator"),
             patch("app.tasks.samocat_content_task.pg_insert") as mock_pg_insert,
         ):
@@ -394,7 +399,7 @@ class TestCollectSamokatContent:
             patch("app.tasks.samocat_content_task.SamokatScraper"),
             patch(
                 "app.tasks.samocat_content_task.asyncio.run",
-                return_value=no_image_content,
+                return_value=(no_image_content, None),
             ),
             patch("app.tasks.samocat_content_task._get_minio"),
             patch("app.tasks.samocat_content_task.get_proxy_rotator"),
@@ -444,7 +449,7 @@ class TestCollectSamokatContent:
             patch("app.tasks.samocat_content_task.SamokatScraper"),
             patch(
                 "app.tasks.samocat_content_task.asyncio.run",
-                return_value=_make_content(),
+                return_value=(_make_content(), b"fake_image"),
             ),
             patch("app.tasks.samocat_content_task._get_minio"),
             patch("app.tasks.samocat_content_task.get_proxy_rotator"),
