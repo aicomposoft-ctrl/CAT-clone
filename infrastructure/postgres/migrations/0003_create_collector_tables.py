@@ -47,6 +47,10 @@ def upgrade() -> None:
     )
     op.create_index("idx_content_scores_sp", "content_scores", ["sku_platform_id"])
     op.create_index("idx_content_scores_date", "content_scores", ["scored_at"])
+    # Composite for the primary query pattern: WHERE sku_platform_id = ? ORDER BY scored_at DESC
+    op.execute(
+        "CREATE INDEX idx_content_scores_sp_date ON content_scores (sku_platform_id, scored_at DESC)"
+    )
 
     op.create_table(
         "price_snapshots",
@@ -80,10 +84,16 @@ def upgrade() -> None:
     )
     op.create_index("idx_reviews_sp", "reviews", ["sku_platform_id"])
     op.create_index("idx_reviews_date", "reviews", ["review_date"])
+    # Composite for the primary query pattern: WHERE sku_platform_id = ? ORDER BY review_date DESC
+    op.execute(
+        "CREATE INDEX idx_reviews_sp_date ON reviews (sku_platform_id, review_date DESC)"
+    )
 
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS idx_reviews_sp_date")
     op.drop_table("reviews")
     op.execute("DROP INDEX IF EXISTS idx_price_snapshots_sp_time")
     op.drop_table("price_snapshots")
+    op.execute("DROP INDEX IF EXISTS idx_content_scores_sp_date")
     op.drop_table("content_scores")

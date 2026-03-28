@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -140,7 +140,8 @@ def collect_ozon_content(self, sku_platform_id: str) -> None:
             "collect_ozon_content: image URL failed SSRF allowlist for item_id=%s", item_id
         )
 
-    today = date.today()
+    now_utc = datetime.now(tz=timezone.utc)
+    today = now_utc.date()
     with get_db_session() as db:
         stmt = (
             pg_insert(ContentScore)
@@ -152,7 +153,7 @@ def collect_ozon_content(self, sku_platform_id: str) -> None:
                 collected_description=content.description,
                 collected_composition=content.composition,
                 collected_image_url=s3_key,
-                created_at=datetime.now(tz=timezone.utc),
+                created_at=now_utc,
             )
             .on_conflict_do_update(
                 constraint="uq_content_scores_sp_date",

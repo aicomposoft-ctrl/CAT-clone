@@ -28,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -105,7 +105,7 @@ def collect_ozon_stock(self, sku_platform_id: str) -> None:
         # No DB write on API failure — retry instead
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
 
-    today = date.today()
+    today = datetime.now(tz=timezone.utc).date()
     with get_db_session() as db:
         # Partial-row upsert: set_ includes ONLY stock fields.
         # Content fields are intentionally absent from set_ so they are never

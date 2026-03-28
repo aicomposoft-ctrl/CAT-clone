@@ -253,7 +253,10 @@ class OzonScraper(BaseScraper):
 
         # availability: 1 = available, 0 = out of stock
         availability = cart_widget.get("availability", 0)
-        count = int(cart_widget.get("count", 0))
+        try:
+            count = int(cart_widget.get("count", 0))
+        except (ValueError, TypeError):
+            count = 0
 
         # Both conditions must hold: Ozon may report availability=1 with count=0
         # (e.g., item available to order but no warehouse stock)
@@ -292,7 +295,10 @@ class OzonScraper(BaseScraper):
 
             text = sanitize(fb.get("text", ""), 5000)
 
-            rating = max(1, min(5, int(fb.get("score", 5))))
+            try:
+                rating = max(1, min(5, int(fb.get("score", 5))))
+            except (ValueError, TypeError):
+                rating = 5
 
             # Accept either "publishedAt" or "createdAt", take first 10 chars (date part)
             date_str = (fb.get("publishedAt") or fb.get("createdAt") or "")[:10]

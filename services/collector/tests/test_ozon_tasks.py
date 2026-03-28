@@ -267,7 +267,7 @@ class TestCollectOzonContent:
         db2.execute.assert_called_once()
 
     def test_cross_tenant_isolation(self):
-        """Content task for org_A's sku_platform must not write with sp_B's id."""
+        """Content task for org_A's sku_platform must write with sp_a_id, not sp_b_id."""
         sp_a_id = uuid.uuid4()
         sp_b_id = uuid.uuid4()
         row_a = (sp_a_id, SKU_A_ID, "123456789", ORG_A)
@@ -299,16 +299,18 @@ class TestCollectOzonContent:
             ),
             patch("app.tasks.ozon_content_task._get_minio"),
             patch("app.tasks.ozon_content_task.get_proxy_rotator"),
+            patch("app.tasks.ozon_content_task.pg_insert") as mock_pg_insert,
         ):
             from app.tasks.ozon_content_task import collect_ozon_content
 
             collect_ozon_content(str(sp_a_id))
 
         write_db.execute.assert_called_once()
-        # Verify the stmt passed to execute was built with sp_a_id, not sp_b_id
-        # We can check by confirming execute was called (content was written for sp_a)
-        # and the task was invoked with sp_a_id, not sp_b_id
         assert call_count[0] == 2  # exactly 2 DB sessions (load + write)
+        # Verify pg_insert values contain sp_a_id, not sp_b_id
+        values_kwargs = mock_pg_insert.return_value.values.call_args[1]
+        assert values_kwargs["sku_platform_id"] == sp_a_id
+        assert values_kwargs.get("sku_platform_id") != sp_b_id
 
 
 # ---------------------------------------------------------------------------

@@ -68,8 +68,8 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | 2 | SKU CRUD + bulk upload | P0 | 1 | 8 | ✅ Done |
 | 3 | Reference upload (S3) | P0 | 1 | 5 | ✅ Done |
 | 4 | WB scraper | P0 | 2 | 13 | ✅ Done |
-| 5 | Ozon scraper | P0 | 2 | 13 | 🔲 Next |
-| 6 | Самокат scraper | P0 | 2 | 8 | 🔲 |
+| 5 | Ozon scraper | P0 | 2 | 13 | ✅ Done |
+| 6 | Самокат scraper | P0 | 2 | 8 | 🔲 Next |
 | 7 | Лента scraper | P0 | 2 | 8 | 🔲 |
 | 8 | Content scoring (image) | P0 | 3 | 13 | 🔲 |
 | 9 | Content scoring (text) | P0 | 3 | 8 | 🔲 |
@@ -86,9 +86,9 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | 20 | Multi-client support | P1 | 10 | 13 | 🔲 |
 
 **Sprint 1:** Полностью завершён ✅ (Auth · SKU CRUD · Reference Upload S3)
-**Sprint 2 remaining:** Ozon scraper · Самокат scraper · Лента scraper
+**Sprint 2:** WB scraper ✅ · Ozon scraper ✅ · Самокат scraper 🔲 · Лента scraper 🔲
 
-To implement next: `/feature ozon-scraper`
+To implement next: `/feature samocat-scraper`
 
 ## License
 
