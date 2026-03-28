@@ -28,15 +28,20 @@ _None._
 ### Critical
 _None._
 
-### Major
-_None._
+### Major (all fixed)
+- **SEC-1** ✅ `external_review_id` stored without sanitization or length cap — treated as trusted but originates from scraped API data. Fixed: `str(fb.get("id", ""))[:200].strip()` applied before storage.
+
+### Minor (noted, not exploitable)
+- Unicode digits pass `isdigit()` — `re.fullmatch(r'\d+', ...)` would be more explicit but is not a security vulnerability given httpx URL encoding as a backstop.
+- `external_id` CRLF-in-logs theoretical: `external_id` originates from the internal DB `sku_platforms.external_id` column, not directly from the API response.
 
 ### Findings
-- **SSRF guard** ✅ `_SK_IMAGE_CDN_RE` re-validates inside `_download_image_async` (double check: caller + callee). Redundant outer check in content task removed without weakening defence — the inner check in `_download_image_async` is the authoritative guard.
-- **Image URLs not written to logs** ✅ `logger.warning` for SSRF failure does not include `content.image_url` (untrusted scraped data).
-- **Proxy rotation** ✅ All HTTP calls go through `BaseScraper._get()` which rotates proxy and User-Agent.
-- **A03: No SQL injection** ✅ All DB writes use SQLAlchemy ORM / pg_insert with parameterised values.
+- **SSRF guard** ✅ `_SK_IMAGE_CDN_RE` re-validates inside `_download_image_async` (authoritative guard). Outer check in content task removed — inner check remains.
+- **Image URLs not written to logs** ✅ `logger.warning` for SSRF/download failure does not include URL value.
+- **Proxy rotation** ✅ All HTTP calls go through `BaseScraper._get()`.
+- **A03: No SQL injection** ✅ All DB writes use SQLAlchemy ORM / pg_insert parameterised values.
 - **Input validation** ✅ `_parse_product_id` rejects non-numeric external IDs before any HTTP call.
+- **Multi-tenant writes** — DB writes use `sku_platform_id` (UUID, FK to `sku_platforms`→`skus`→`org_id`). FK chain + PostgreSQL RLS provide isolation. `org_id` used for S3 key namespacing. Accepted: no schema change required.
 
 ---
 
@@ -68,19 +73,26 @@ _None._
 
 ## Agent 5 — Test Coverage
 
-### Critical
-_None._
+### Critical (all fixed)
+- **COV-1** ✅ Partial-row contract not verified — no test asserted content fields absent from stock task `set_`. Fixed: `test_partial_row_contract_content_fields_absent_from_set` added.
+- **COV-2** ✅ `PARSE_ERROR` branch untested in price, stock, reviews tasks. Fixed: `test_parse_error_non_numeric_id_skips` added to all three.
+
+### Major (fixed)
+- **COV-3** ✅ `RATE_LIMITED` error code untested in price, stock, reviews tasks. Fixed: `test_rate_limited_triggers_retry_no_db_write` added to all three.
+
+### Minor (fixed)
+- **COV-4** ✅ `NO_PRODUCT_ID` missing from reviews task. Fixed.
 
 ### Findings
-- **53 tests, all passing** ✅
-- Happy path, NOT_FOUND, RATE_LIMITED, API_UNAVAILABLE, NO_PRODUCT_ID, PARSE_ERROR covered per task.
+- **61 tests, all passing** ✅
+- Happy path, NOT_FOUND, RATE_LIMITED, API_UNAVAILABLE, NO_PRODUCT_ID, PARSE_ERROR covered for all 4 tasks.
 - Cross-tenant isolation test present for all 4 tasks.
-- SSRF image URL test present.
-- MinIO upload failure non-fatal test present (updated to reflect single asyncio.run contract).
+- Partial-row contract explicitly verified for stock task.
 - `_parse_product_id`, `_kopeks_to_decimal`, `_safe_qty`, `_parse_rating`, `_parse_review_date` all have unit-level tests.
 
-### Minor
-- No test for `collect_samocat_content_all` orchestrator dispatch (group() call). Acceptable given orchestrator is thin DB-read + Celery dispatch.
+### Remaining minor (deferred)
+- No orchestrator dispatch test (thin DB-read + Celery group — acceptable).
+- SSRF regex has no path-traversal test (`../` chars allowed by regex, but outer `https://cdn.samokat.ru/` anchor prevents exploitation).
 
 ---
 
@@ -89,9 +101,9 @@ _None._
 | Category | Critical | Major | Minor |
 |----------|----------|-------|-------|
 | Code Quality | 0 | 5 fixed | 1 deferred |
-| Security | 0 | 0 | — |
-| Multi-tenant | 0 | 0 | — |
+| Security | 0 | 1 fixed | 2 noted |
+| Multi-tenant | 0 | 0 (FK chain accepted) | — |
 | Performance | 0 | 1 fixed | 1 deferred |
-| Test Coverage | 0 | 0 | 1 deferred |
+| Test Coverage | 2 fixed | 1 fixed | 2 deferred |
 
-**Decision: MERGE READY** — all Critical and Major issues resolved before commit.
+**Decision: MERGE READY** — all Critical and Major issues resolved. 61/61 tests passing.
