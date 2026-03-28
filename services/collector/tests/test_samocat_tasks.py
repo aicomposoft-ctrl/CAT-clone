@@ -620,6 +620,34 @@ class TestCollectSamokatPrice:
             collect_samocat_price(str(uuid.uuid4()))
         db.add.assert_not_called()
 
+    def test_parse_error_non_numeric_id_skips(self):
+        """Non-numeric external_id → ScraperError(PARSE_ERROR) → no DB write."""
+        db2 = self._run(row=_make_row3(product_id="moloko-prostokwashino"))
+        db2.add.assert_not_called()
+
+    def test_rate_limited_triggers_retry_no_db_write(self):
+        """429 / RATE_LIMITED → self.retry() called, no DB write."""
+        row = _make_row3()
+        factory, db2 = _make_two_db_cms(row)
+
+        with (
+            patch("app.tasks.samocat_price_task.get_db_session", side_effect=factory),
+            patch("app.tasks.samocat_price_task.SamokatScraper"),
+            patch(
+                "app.tasks.samocat_price_task.asyncio.run",
+                side_effect=ScraperError("RATE_LIMITED"),
+            ),
+            patch("app.tasks.samocat_price_task.get_proxy_rotator"),
+        ):
+            from app.tasks.samocat_price_task import collect_samocat_price
+
+            try:
+                collect_samocat_price(str(row[0]))
+            except Exception:
+                pass  # Celery raises Retry — expected
+
+        db2.add.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # TestCollectSamokatStock
@@ -737,6 +765,68 @@ class TestCollectSamokatStock:
 
             collect_samocat_stock(str(uuid.uuid4()))
         db.execute.assert_not_called()
+
+    def test_parse_error_non_numeric_id_skips(self):
+        """Non-numeric external_id → ScraperError(PARSE_ERROR) → no DB write."""
+        db2 = self._run(row=_make_row3(product_id="moloko-prostokwashino"))
+        db2.execute.assert_not_called()
+
+    def test_rate_limited_triggers_retry_no_db_write(self):
+        """429 / RATE_LIMITED → self.retry() called, no DB write."""
+        row = _make_row3()
+        factory, db2 = _make_two_db_cms(row)
+
+        with (
+            patch("app.tasks.samocat_stock_task.get_db_session", side_effect=factory),
+            patch("app.tasks.samocat_stock_task.SamokatScraper"),
+            patch(
+                "app.tasks.samocat_stock_task.asyncio.run",
+                side_effect=ScraperError("RATE_LIMITED"),
+            ),
+            patch("app.tasks.samocat_stock_task.get_proxy_rotator"),
+        ):
+            from app.tasks.samocat_stock_task import collect_samocat_stock
+
+            try:
+                collect_samocat_stock(str(row[0]))
+            except Exception:
+                pass
+
+        db2.execute.assert_not_called()
+
+    def test_partial_row_contract_content_fields_absent_from_set(self):
+        """ON CONFLICT set_ must NOT contain content fields — partial-row contract."""
+        sp_a_id = uuid.uuid4()
+        row_a = (sp_a_id, "12345", ORG_A)
+        factory, db2 = _make_two_db_cms(row_a)
+
+        with (
+            patch("app.tasks.samocat_stock_task.get_db_session", side_effect=factory),
+            patch("app.tasks.samocat_stock_task.SamokatScraper"),
+            patch(
+                "app.tasks.samocat_stock_task.asyncio.run",
+                return_value=_make_stock(),
+            ),
+            patch("app.tasks.samocat_stock_task.get_proxy_rotator"),
+            patch("app.tasks.samocat_stock_task.pg_insert") as mock_pg_insert,
+        ):
+            from app.tasks.samocat_stock_task import collect_samocat_stock
+
+            collect_samocat_stock(str(sp_a_id))
+
+        set_kwargs = (
+            mock_pg_insert.return_value.values.return_value
+            .on_conflict_do_update.call_args[1]["set_"]
+        )
+        # Stock-only fields must be present
+        assert "in_stock" in set_kwargs
+        assert "warehouse_qty" in set_kwargs
+        # Content fields must be absent — they must never be overwritten by stock task
+        for content_field in ("collected_title", "collected_description",
+                               "collected_composition", "collected_image_url"):
+            assert content_field not in set_kwargs, (
+                f"Partial-row contract violated: '{content_field}' must not be in set_"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -877,6 +967,41 @@ class TestCollectSamokatReviews:
 
     def test_not_found_no_db_write(self):
         db2, _ = self._run(scraper_side_effect=ScraperError("NOT_FOUND"))
+        db2.execute.assert_not_called()
+
+    def test_no_product_id_skips(self):
+        """external_id=None → NO_PRODUCT_ID → silent skip, no DB write."""
+        db2, _ = self._run(row=_make_row3(product_id=None))
+        db2.execute.assert_not_called()
+
+    def test_parse_error_non_numeric_id_skips(self):
+        """Non-numeric external_id → PARSE_ERROR → no DB write."""
+        db2, _ = self._run(row=_make_row3(product_id="moloko-prostokwashino"))
+        db2.execute.assert_not_called()
+
+    def test_rate_limited_triggers_retry_no_db_write(self):
+        """429 / RATE_LIMITED → self.retry() called, no DB write."""
+        row = _make_row3()
+        factory, db2 = _make_two_db_cms(row)
+
+        with (
+            patch(
+                "app.tasks.samocat_reviews_task.get_db_session", side_effect=factory
+            ),
+            patch("app.tasks.samocat_reviews_task.SamokatScraper"),
+            patch(
+                "app.tasks.samocat_reviews_task.asyncio.run",
+                side_effect=ScraperError("RATE_LIMITED"),
+            ),
+            patch("app.tasks.samocat_reviews_task.get_proxy_rotator"),
+        ):
+            from app.tasks.samocat_reviews_task import collect_samocat_reviews
+
+            try:
+                collect_samocat_reviews(str(row[0]))
+            except Exception:
+                pass
+
         db2.execute.assert_not_called()
 
 

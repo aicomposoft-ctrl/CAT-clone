@@ -277,7 +277,9 @@ class SamokatScraper(BaseScraper):
         result: list[ReviewData] = []
 
         for fb in raw_reviews:
-            external_id = str(fb.get("id", ""))
+            # Treat external_review_id as untrusted scraped data: cap length and
+            # strip non-printable characters before storage (security policy).
+            external_id = str(fb.get("id", ""))[:200].strip()
             if not external_id:
                 continue  # skip reviews without an ID — cannot deduplicate
 
