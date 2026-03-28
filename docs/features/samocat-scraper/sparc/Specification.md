@@ -44,7 +44,11 @@ So that distribution monitoring reflects actual darkstore availability.
 Acceptance Criteria:
 Given a valid sku_platform row for Самокат,
 When collect_samocat_stock(sku_platform_id) is called,
-Then stock_snapshots / content_scores is upserted with in_stock and total_qty.
+Then content_scores is upserted (ON CONFLICT uq_content_scores_sp_date)
+     with in_stock (Boolean) and warehouse_qty (Integer ≥ 0),
+     scored_at = today() UTC,
+     content fields (collected_title, etc.) are NOT overwritten (partial-row contract),
+     no exception propagated for NOT_FOUND products.
 ```
 
 ### US-4: Reviews Collection
@@ -66,10 +70,24 @@ As the CAT multi-tenant system,
 I want every Самокат scraper DB write to be scoped to the correct org_id,
 So that org_A's SKU data never contaminates org_B's records.
 
-Acceptance Criteria:
-Given sku_platforms for org_A and org_B with the same product_id,
-When collect_samocat_content(sp_a_id) is called,
-Then only org_A's sku_platform_id appears in the upserted content_scores row.
+Acceptance Criteria (one per task — all required by testing rules):
+Given sku_platforms sp_a (org_A) and sp_b (org_B) with the same product_id,
+
+Content:
+  When collect_samocat_content(sp_a_id) is called,
+  Then sku_platform_id in the content_scores upsert == sp_a_id (not sp_b_id).
+
+Price:
+  When collect_samocat_price(sp_a_id) is called,
+  Then sku_platform_id in the price_snapshots insert == sp_a_id (not sp_b_id).
+
+Stock:
+  When collect_samocat_stock(sp_a_id) is called,
+  Then sku_platform_id in the content_scores upsert == sp_a_id (not sp_b_id).
+
+Reviews:
+  When collect_samocat_reviews(sp_a_id) is called,
+  Then all upserted reviews rows have sku_platform_id == sp_a_id (not sp_b_id).
 ```
 
 ### US-6: Retry on Transient Errors
@@ -121,9 +139,16 @@ Then it retries up to 3 times with countdown = 2^attempt seconds,
 All Самокат data writes to the same tables as WB/Ozon:
 
 ```
-content_scores (sku_platform_id, scored_at) — UNIQUE constraint
-price_snapshots (sku_platform_id, collected_at) — append-only
-reviews (sku_platform_id, external_review_id) — UNIQUE constraint
+content_scores (sku_platform_id, scored_at) — UNIQUE constraint uq_content_scores_sp_date
+  content task writes: collected_title, collected_description, collected_composition, collected_image_url
+  stock task writes:   in_stock (Boolean), warehouse_qty (Integer)   ← partial-row contract
+  ML processor writes: image_score, description_score, content_total (future)
+
+price_snapshots (sku_platform_id, collected_at) — append-only, no dedup
+  fields: price, original_price, discount_pct, promo_label
+
+reviews (sku_platform_id, external_review_id) — UNIQUE constraint uq_reviews_sp_ext_id
+  fields: review_text, rating (SmallInt 1-5), review_date (Date), collected_at
 ```
 
 No new migration required — platform row `{name: "Samocat"}` must exist in `platforms` table.

@@ -64,6 +64,8 @@ class SamokatScraper(BaseScraper):
 
 ### Product Details (`GET /v2/items/{product_id}`)
 
+Single endpoint provides content, price, AND stock data:
+
 ```json
 {
   "id": 12345,
@@ -81,13 +83,15 @@ class SamokatScraper(BaseScraper):
 ```
 
 Field mapping:
-- `price` / 100 → `PriceData.price` (Decimal)
-- `originalPrice` / 100 → `PriceData.original_price`
-- `discountPercent` → `PriceData.discount_pct`
+- `price` / 100 → `PriceData.price` (Decimal, RUB)
+- `originalPrice` / 100 → `PriceData.original_price` (fallback to `price` if absent)
+- `discountPercent` → `PriceData.discount_pct` (Decimal, default 0)
 - `promoLabel` → `PriceData.promo_label` (nullable)
-- `inStock` → `StockData.in_stock`
-- `availableQuantity` → `StockData.total_qty`
-- `images[0].url` → `ContentData.image_url` (if passes SSRF allowlist)
+- `inStock` → `StockData.in_stock` (bool, default False)
+- `availableQuantity` → `StockData.total_qty` → stored as `content_scores.warehouse_qty` (Integer)
+- `images[0].url` → `ContentData.image_url` (if passes SSRF allowlist, else None)
+
+**Note:** The PRD listed a separate `/v2/items/{id}/availability` endpoint. All three tasks (content, price, stock) use the same main endpoint which contains all fields. This reduces API calls by 2/3 for the orchestrated flow.
 
 ### Reviews (`GET /v2/items/{product_id}/reviews?page=1&limit=50`)
 

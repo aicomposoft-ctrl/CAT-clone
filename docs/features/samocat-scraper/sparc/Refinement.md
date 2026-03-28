@@ -97,12 +97,83 @@ Scenario: collect_reviews empty list
   Then task returns early — no DB session opened for write
 ```
 
+```gherkin
+Scenario: collect_stock happy path
+  Given a sku_platform with external_id = "12345"
+  And Самокат API returns {"inStock": true, "availableQuantity": 48}
+  When collect_samocat_stock(sku_platform_id) is called
+  Then content_scores is upserted with in_stock=True and warehouse_qty=48
+  And content fields (collected_title, etc.) are NOT overwritten (set_ excludes them)
+
+Scenario: collect_stock product out of stock
+  Given a sku_platform with external_id = "12345"
+  And API returns {"inStock": false, "availableQuantity": 0}
+  When collect_samocat_stock(sku_platform_id) is called
+  Then content_scores is upserted with in_stock=False and warehouse_qty=0
+
+Scenario: API_UNAVAILABLE — 503 after 3 retries
+  Given a valid sku_platform
+  And Самокат API returns 503 on every call
+  When any collect_samocat_* task is called
+  Then self.retry() is called up to 3 times with countdown = 2**attempt
+  And ScraperError("API_UNAVAILABLE") is propagated after max retries
+
+Scenario: cross-tenant isolation — price task
+  Given sku_platforms sp_a (org_A) and sp_b (org_B) with the same product_id
+  When collect_samocat_price(sp_a_id) is called
+  Then the price_snapshots insert contains sku_platform_id = sp_a_id
+  And not sp_b_id
+
+Scenario: cross-tenant isolation — stock task
+  Given sku_platforms sp_a (org_A) and sp_b (org_B) with the same product_id
+  When collect_samocat_stock(sp_a_id) is called
+  Then the content_scores upsert contains sku_platform_id = sp_a_id
+  And not sp_b_id
+
+Scenario: cross-tenant isolation — reviews task
+  Given sku_platforms sp_a (org_A) and sp_b (org_B) with the same product_id
+  When collect_samocat_reviews(sp_a_id) is called
+  Then all review rows upserted contain sku_platform_id = sp_a_id
+  And not sp_b_id
+
+Scenario: images list is empty
+  Given API returns valid product JSON with "images": []
+  When collect_samocat_content processes the response
+  Then collected_image_url = None
+  And upsert proceeds with content fields populated
+
+Scenario: image download failure is non-fatal
+  Given API returns a valid image URL passing SSRF allowlist
+  And MinIO upload raises an exception
+  When collect_samocat_content processes the image
+  Then collected_image_url = None
+  And content_scores upsert proceeds with title/description/composition populated
+
+Scenario: discountPercent is null
+  Given API returns {"discountPercent": null, "price": 9900, "originalPrice": 9900}
+  When collect_samocat_price processes the response
+  Then discount_pct = Decimal("0")
+  And no exception is raised
+
+Scenario: availableQuantity is non-integer
+  Given API returns {"inStock": true, "availableQuantity": "много"}
+  When collect_samocat_stock processes the response
+  Then warehouse_qty = 0 (defensive fallback)
+  And in_stock = True
+
+Scenario: sku_platform_id not found in DB (stale task)
+  Given sku_platform_id refers to a deleted record
+  When any collect_samocat_* task is called
+  Then the task logs a warning and returns without error
+  And no DB write occurs
+```
+
 ### Coverage Targets
 
 | Test Type | Target |
 |-----------|--------|
 | Unit (mocked HTTP) | ≥ 85% lines in samocat.py, ≥ 85% in task files |
-| Cross-tenant isolation | 1 test per task (required by testing rules) |
+| Cross-tenant isolation | 1 test per task × 4 tasks (required by testing rules) |
 | Error path coverage | All 5 error codes (NO_PRODUCT_ID, PARSE_ERROR, NOT_FOUND, RATE_LIMITED, API_UNAVAILABLE) |
 
 ---

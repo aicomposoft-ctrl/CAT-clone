@@ -137,7 +137,7 @@ ASYNC FUNCTION collect_stock(product_id: str) -> StockData
   EXCEPT (TypeError, ValueError):
     total_qty = 0
 
-  RETURN StockData(in_stock=in_stock, total_qty=total_qty)
+  RETURN StockData(in_stock=in_stock, total_qty=total_qty)  # total_qty → warehouse_qty in DB
 ```
 
 ---
@@ -261,7 +261,70 @@ TASK collect_samocat_content(sku_platform_id: str) -> None
 
 ---
 
-## 8. collect_samocat_price Task
+## 8. collect_samocat_stock Task
+
+```
+TASK collect_samocat_stock(sku_platform_id: str) -> None
+
+  # Session 1: load primitives
+  WITH get_db_session() AS db:
+    row = db.query(SKUPlatform.id, SKUPlatform.external_id, SKU.org_id)
+           .join(SKU).filter(SKUPlatform.id == UUID(sku_platform_id)).first()
+
+  IF row is None:
+    LOG warning "sku_platform {sku_platform_id} not found — skipping"
+    RETURN
+
+  sp_id, raw_product_id, org_id = row
+
+  TRY:
+    product_id = _parse_product_id(raw_product_id)
+  EXCEPT ValueError:
+    LOG info "NO_PRODUCT_ID — skipping"
+    RETURN
+  EXCEPT ScraperError:
+    LOG warning "invalid product_id for sku_platform {sku_platform_id}"
+    RETURN
+
+  scraper = SamokatScraper(proxy_rotator=get_proxy_rotator())
+
+  TRY:
+    stock = asyncio.run(scraper.collect_stock(product_id))
+  EXCEPT ScraperError AS exc:
+    IF exc.code == "NOT_FOUND":
+      LOG info "product not found — skipping"
+      RETURN
+    LOG warning f"ScraperError code={exc.code} sku_platform={sku_platform_id}"
+    RAISE self.retry(exc=exc, countdown=2 ** self.request.retries)
+
+  # Session 2: partial-row upsert
+  # ONLY stock fields in set_ — content fields must NOT be overwritten
+  now_utc = datetime.now(tz=timezone.utc)
+  WITH get_db_session() AS db:
+    stmt = (
+      pg_insert(ContentScore)
+      .values(
+        id=uuid4(), sku_platform_id=sp_id, scored_at=now_utc.date(),
+        in_stock=stock.in_stock, warehouse_qty=stock.total_qty,
+        created_at=now_utc,
+      )
+      .on_conflict_do_update(
+        constraint="uq_content_scores_sp_date",
+        set_={
+          "in_stock": stock.in_stock,
+          "warehouse_qty": stock.total_qty,
+          # content fields intentionally absent — partial-row contract
+        }
+      )
+    )
+    db.execute(stmt)
+
+  LOG info f"collect_samocat_stock: done sku_platform={sku_platform_id}"
+```
+
+---
+
+## 9. collect_samocat_price Task
 
 ```
 TASK collect_samocat_price(sku_platform_id: str) -> None
