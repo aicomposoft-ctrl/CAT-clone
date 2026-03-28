@@ -10,6 +10,35 @@ _LT_IMAGE_CDN_RE = re.compile(
 )
 ```
 
+### Module-level helpers
+
+```
+# Re-use from samocat.py (same implementation — import, do not duplicate):
+#   _parse_product_id(raw)   — numeric-only validation
+#   _kopeks_to_decimal(k)    — int kopeks → Decimal RUB
+#   _safe_qty(raw)           — int cast with 0 fallback
+#   _parse_rating(raw)       — clamp to [1,5], None → 5
+#   _parse_review_date(raw)  — ISO date parse, fallback today
+#
+# Import pattern in lenta.py:
+#   from app.scrapers.samocat import (
+#       _parse_product_id, _kopeks_to_decimal,
+#       _safe_qty, _parse_rating, _parse_review_date,
+#   )
+```
+
+### _download_image_async(url, proxy) → bytes
+
+```
+# Lenta-specific: validates against _LT_IMAGE_CDN_RE (NOT _SK_IMAGE_CDN_RE)
+IF NOT _LT_IMAGE_CDN_RE.match(url):
+    RAISE ValueError("Image URL failed SSRF allowlist")
+ASYNC WITH httpx.AsyncClient(proxy=proxy, timeout=30.0) AS client:
+    resp = await client.get(url)
+    resp.raise_for_status()
+    RETURN resp.content
+```
+
 ### LentaScraper(BaseScraper)
 
 ```
@@ -222,7 +251,12 @@ FUNCTION collect_lenta_content(self, sku_platform_id: str):
           created_at=now_utc,
       ).on_conflict_do_update(
           constraint="uq_content_scores_sp_date",
-          set_={collected_title, collected_description, collected_composition, collected_image_url}
+          set_={
+              "collected_title": content.title,
+              "collected_description": content.description,
+              "collected_composition": content.composition,
+              "collected_image_url": s3_key,
+          },
       )
       db.execute(stmt)
 ```
@@ -254,8 +288,11 @@ FUNCTION collect_lenta_stock(self, sku_platform_id: str):
           created_at=now_utc,
       ).on_conflict_do_update(
           constraint="uq_content_scores_sp_date",
-          set_={in_stock, warehouse_qty}
-          # content fields INTENTIONALLY ABSENT
+          set_={
+              "in_stock": stock_data.in_stock,
+              "warehouse_qty": stock_data.total_qty,
+              # content fields INTENTIONALLY ABSENT — partial-row contract
+          },
       )
       db.execute(stmt)
 ```

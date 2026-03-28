@@ -52,10 +52,20 @@ so that price deviation alerts can fire when prices drift.
 
 ```gherkin
 Scenario: Happy path — price returned in kopeks
-  Given the API returns { "price": 15990, "originalPrice": 19990 }
+  Given the API returns { "price": 15990, "originalPrice": 19990, "discountPercent": 20 }
   When collect_lenta_price("12345") is called
   Then PriceData.price = Decimal("159.90")
   And PriceData.original_price = Decimal("199.90")
+  And PriceData.discount_pct = Decimal("20.00")
+  # discount_pct is taken directly from the API's discountPercent field (not computed)
+
+Scenario: promoLabel present and absent
+  Given the API returns { "price": 15990, "promoLabel": "Акция" }
+  When collect_lenta_price("12345") is called
+  Then PriceData.promo_label = "Акция"
+  Given the API returns { "price": 15990 } with no promoLabel field
+  When collect_lenta_price("12345") is called
+  Then PriceData.promo_label = None
 
 Scenario: No discount (originalPrice absent)
   Given the API returns { "price": 15990 } with no originalPrice field
@@ -94,9 +104,17 @@ Scenario: availableQuantity is non-integer string
 
 Scenario: Partial-row contract — content fields NOT in ON CONFLICT set_
   When collect_lenta_stock upserts content_scores
-  Then set_ contains only in_stock and warehouse_qty
+  Then the ON CONFLICT constraint is "uq_content_scores_sp_date"
+  And set_ contains only in_stock and warehouse_qty
   And collected_title, collected_description, collected_composition,
       collected_image_url are absent from set_
+
+Scenario: Out-of-stock product
+  Given the API returns { "inStock": false, "availableQuantity": 0 }
+  When collect_lenta_stock("12345") is called
+  Then StockData.in_stock = False
+  And StockData.total_qty = 0
+  And content_scores upsert fires with in_stock=False, warehouse_qty=0
 ```
 
 ### US-4: Collect Reviews
@@ -119,7 +137,14 @@ Scenario: Deduplication on re-run
   Given the same review has already been stored
   When collect_lenta_reviews runs again
   Then ON CONFLICT DO UPDATE fires on uq_reviews_sp_ext_id
+  And the existing row's review_text, rating, review_date are updated
   And no duplicate row is inserted
+
+Scenario: Bulk insert — single db.execute call for all reviews
+  Given the Lenta API returns 5 reviews
+  When collect_lenta_reviews runs
+  Then db.execute is called exactly once with all 5 rows
+  And no per-review loop executes individual INSERT statements
 ```
 
 ## Data Model
