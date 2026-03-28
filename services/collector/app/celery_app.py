@@ -32,6 +32,16 @@ celery_app = Celery(
         "app.tasks.ozon_stock_task",
         "app.tasks.ozon_reviews_task",
         "app.tasks.ozon_orchestrator",
+        "app.tasks.samocat_content_task",
+        "app.tasks.samocat_price_task",
+        "app.tasks.samocat_stock_task",
+        "app.tasks.samocat_reviews_task",
+        "app.tasks.samocat_orchestrator",
+        "app.tasks.lenta_content_task",
+        "app.tasks.lenta_price_task",
+        "app.tasks.lenta_stock_task",
+        "app.tasks.lenta_reviews_task",
+        "app.tasks.lenta_orchestrator",
     ],
 )
 
