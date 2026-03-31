@@ -70,10 +70,10 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | 4 | WB scraper | P0 | 2 | 13 | ✅ Done |
 | 5 | Ozon scraper | P0 | 2 | 13 | ✅ Done |
 | 6 | Самокат scraper | P0 | 2 | 8 | ✅ Done |
-| 7 | Лента scraper | P0 | 2 | 8 | 🔲 Next |
-| 8 | Content scoring (image) | P0 | 3 | 13 | 🔲 |
-| 9 | Content scoring (text) | P0 | 3 | 8 | 🔲 |
-| 10 | Stock plan upload | P0 | 3 | 5 | 🔲 |
+| 7 | Лента scraper | P0 | 2 | 8 | ✅ Done |
+| 8 | Content scoring (image) | P0 | 3 | 13 | 🔲 Next |
+| 9 | Content scoring (text) | P0 | 3 | 8 | 🔲 Next |
+| 10 | Stock plan upload | P0 | 3 | 5 | 🔲 Next |
 | 11 | Distribution dashboard | P0 | 4 | 13 | 🔲 |
 | 12 | Excel Export (Content) | P0 | 4 | 8 | 🔲 |
 | 13 | Excel Export (Stock) | P0 | 4 | 8 | 🔲 |
@@ -86,9 +86,10 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | 20 | Multi-client support | P1 | 10 | 13 | 🔲 |
 
 **Sprint 1:** Полностью завершён ✅ (Auth · SKU CRUD · Reference Upload S3)
-**Sprint 2:** WB scraper ✅ · Ozon scraper ✅ · Самокат scraper ✅ · Лента scraper 🔲
+**Sprint 2:** Полностью завершён ✅ (WB · Ozon · Самокат · Лента scrapers)
+**Sprint 3:** Content scoring (image + text) · Stock plan upload — 🔲 Next
 
-To implement next: `/feature lenta-scraper`
+To implement next: `/feature content-scoring-image`
 
 ## License
 
