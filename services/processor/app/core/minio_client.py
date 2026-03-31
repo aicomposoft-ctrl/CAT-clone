@@ -11,6 +11,9 @@ Credentials loaded from environment variables (AC-SEC-4):
   MINIO_BUCKET     — bucket name (default: "cat-data")
 
 MAX_IMAGE_BYTES env var controls the file size limit (default 30 MB).
+
+Singleton: _s3_client is initialized once per worker process on first
+download_object call to avoid boto3 client creation overhead per task.
 """
 
 from __future__ import annotations
@@ -23,17 +26,22 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BUCKET = "cat-data"
 _MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", 30_000_000))
 
+_s3_client = None
+
 
 def _get_s3_client():
-    """Return a boto3 S3 client pointed at the MinIO endpoint."""
-    import boto3
+    """Return the module-level boto3 S3 singleton (lazy init, one client per process)."""
+    global _s3_client
+    if _s3_client is None:
+        import boto3
 
-    return boto3.client(
-        "s3",
-        endpoint_url=f"http://{os.environ['MINIO_ENDPOINT']}",
-        aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
-        aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
-    )
+        _s3_client = boto3.client(
+            "s3",
+            endpoint_url=f"http://{os.environ['MINIO_ENDPOINT']}",
+            aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
+            aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
+        )
+    return _s3_client
 
 
 def download_object(s3_key: str, bucket: str | None = None) -> bytes:

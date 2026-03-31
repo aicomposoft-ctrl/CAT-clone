@@ -33,9 +33,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, timezone
+from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Optional
 
 from celery import group
 from sqlalchemy import update
@@ -55,7 +54,6 @@ _W_COMP = Decimal("0.25")
 
 
 def _today() -> date:
-    from datetime import datetime
     return datetime.now(tz=timezone.utc).date()
 
 
@@ -121,8 +119,8 @@ def score_text_content(
     self,
     cs_id: str,
     sku_id: str,
-    description: Optional[str],
-    composition: Optional[str],
+    description: str | None,
+    composition: str | None,
 ) -> None:
     """
     Compute text similarity scores for one content_scores row.
@@ -135,7 +133,7 @@ def score_text_content(
     """
     import numpy as np
 
-    scores_to_write: dict = {}
+    scores_to_write: dict[str, Decimal] = {}
 
     # ── Description scoring ──────────────────────────────────────────────────
     if description and description.strip():

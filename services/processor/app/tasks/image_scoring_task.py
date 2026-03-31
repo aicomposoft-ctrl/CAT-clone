@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, timezone
+from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from celery import group
@@ -55,7 +55,6 @@ logger = logging.getLogger(__name__)
 
 def _today() -> date:
     """Return today's date in UTC."""
-    from datetime import datetime
     return datetime.now(tz=timezone.utc).date()
 
 

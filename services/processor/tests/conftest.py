@@ -7,7 +7,6 @@ no real infrastructure required.
 
 from __future__ import annotations
 
-import pickle
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -35,8 +34,8 @@ def normalized_embedding() -> np.ndarray:
 
 @pytest.fixture
 def ref_embedding_bytes(normalized_embedding) -> bytes:
-    """Pickled reference embedding (protocol 5)."""
-    return pickle.dumps(normalized_embedding, protocol=5)
+    """Raw float32 bytes embedding (numpy.tobytes format)."""
+    return normalized_embedding.astype(np.float32).tobytes()
 
 
 @pytest.fixture

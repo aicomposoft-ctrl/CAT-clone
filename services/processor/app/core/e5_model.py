@@ -15,6 +15,11 @@ E5 query-document protocol:
   Collected texts (scored here):          encoded with "query: " prefix
     → this module
 
+Pooling strategy:
+  multilingual-e5-base uses MEAN pooling over all non-padding tokens.
+  CLS token is NOT a valid sentence embedding for this model family.
+  Mean pooling is applied with attention_mask to exclude padding tokens.
+
 Thread safety:
   _load() is NOT thread-safe on first call. Celery prefork workers are
   single-threaded per process — safe. Do NOT use with gevent/eventlet.
@@ -78,11 +83,17 @@ def encode_text(text: str) -> np.ndarray:
     )
     with torch.no_grad():
         outputs = _model(**inputs)
-        # CLS token embedding → shape [1, 768]
-        emb = outputs.last_hidden_state[:, 0, :]
+        # Mean pooling over all non-padding tokens (multilingual-e5-base protocol).
+        # CLS token alone is NOT a valid sentence embedding for this model.
+        token_embeddings = outputs.last_hidden_state  # shape [1, seq_len, 768]
+        attention_mask = inputs["attention_mask"]  # shape [1, seq_len]
+        mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        emb = torch.sum(token_embeddings * mask_expanded, dim=1) / torch.clamp(
+            mask_expanded.sum(dim=1), min=1e-9
+        )  # shape [1, 768]
         emb = emb / emb.norm(dim=-1, keepdim=True)  # L2 normalize
 
-    vec: np.ndarray = emb.squeeze().numpy()  # shape (768,)
+    vec: np.ndarray = emb.squeeze().cpu().numpy()  # shape (768,)
 
     norm = float(np.linalg.norm(vec))
     if norm < 1e-8:

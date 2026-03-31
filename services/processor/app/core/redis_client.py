@@ -1,19 +1,22 @@
 """
 Redis client for embedding cache operations in the processor service.
 
-Provides get/set helpers for pickled numpy embedding vectors.
+Provides get/set helpers for raw numpy embedding vectors.
 All keys follow the pattern: ref_emb:{sku_id}:{field}
 
-Security (AC-SEC-2): pickle.loads is called only on values stored by this
-service itself — Redis is internal infrastructure, not internet-exposed.
-UnpicklingError is caught and treated as a missing key (corrupted cache).
+Serialization: raw float32 bytes via numpy.tobytes() / numpy.frombuffer().
+This avoids pickle.loads() which is a potential RCE vector if Redis is
+compromised. Embedding shape is validated against expected dimensions.
+
+Singleton: _redis_client is initialized once per worker process on first
+get_embedding/set_embedding call. REDIS_URL must be set in environment —
+missing = KeyError at startup (fail-fast per secrets policy).
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import pickle
 
 import numpy as np
 
@@ -29,14 +32,20 @@ _SHAPE_BY_FIELD: dict[str, tuple[int, ...]] = {
 }
 _REDIS_TTL = 2592000  # 30 days
 
+_redis_client = None
+
 
 def _get_client():
-    import redis
+    """Return the module-level Redis singleton (lazy init, one pool per process)."""
+    global _redis_client
+    if _redis_client is None:
+        import redis
 
-    return redis.from_url(
-        os.environ.get("REDIS_URL", "redis://redis:6379/0"),
-        decode_responses=False,
-    )
+        _redis_client = redis.from_url(
+            os.environ["REDIS_URL"],  # fail-fast: KeyError if missing
+            decode_responses=False,
+        )
+    return _redis_client
 
 
 def get_embedding(sku_id: str, field: str = "image") -> np.ndarray | None:
@@ -44,12 +53,11 @@ def get_embedding(sku_id: str, field: str = "image") -> np.ndarray | None:
     Load a cached embedding from Redis.
 
     Returns:
-        np.ndarray of shape (512,) if present and valid
-        None if key is missing, expired, or deserialization fails
+        np.ndarray of expected shape if present and valid.
+        None if key is missing, expired, or deserialization fails.
 
     Validates:
-        - pickle.loads result is numpy.ndarray (AC-SEC-2)
-        - shape is (512,) — unexpected shape is treated as corrupted
+        - Result is a numpy.ndarray of expected dtype/shape
     """
     key = f"ref_emb:{sku_id}:{field}"
     try:
@@ -61,43 +69,35 @@ def get_embedding(sku_id: str, field: str = "image") -> np.ndarray | None:
     if raw is None:
         return None
 
-    try:
-        obj = pickle.loads(raw)  # noqa: S301 — internal infra only, not user input
-    except (pickle.UnpicklingError, Exception) as exc:
-        logger.error("Pickle deserialization failed for key %s: %s", key, exc)
-        return None
-
-    if not isinstance(obj, np.ndarray):
-        logger.error(
-            "Unexpected type in Redis key %s: expected ndarray, got %s",
-            key,
-            type(obj).__name__,
-        )
-        return None
-
     expected_shape = _SHAPE_BY_FIELD.get(field, (512,))
-    if obj.shape != expected_shape:
+    try:
+        vec = np.frombuffer(raw, dtype=np.float32)
+    except Exception as exc:
+        logger.error("Cannot decode embedding for key %s: %s", key, exc)
+        return None
+
+    if vec.shape != expected_shape:
         logger.error(
             "Unexpected embedding shape for key %s: expected %s, got %s",
             key,
             expected_shape,
-            obj.shape,
+            vec.shape,
         )
         return None
 
-    return obj
+    return vec
 
 
 def set_embedding(sku_id: str, embedding: np.ndarray, field: str = "image") -> None:
     """
     Store a numpy embedding in Redis with 30-day TTL.
 
-    Uses pickle protocol 5 for forward compatibility with Python 3.11+.
+    Serialized as raw float32 bytes (numpy.tobytes) — no pickle.
 
     Raises:
         Exception — Redis connection error (caller should retry)
     """
     key = f"ref_emb:{sku_id}:{field}"
-    payload = pickle.dumps(embedding, protocol=5)
+    payload = embedding.astype(np.float32).tobytes()
     _get_client().setex(key, _REDIS_TTL, payload)
     logger.debug("Embedding stored at %s (%d bytes)", key, len(payload))

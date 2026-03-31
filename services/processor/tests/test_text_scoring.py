@@ -6,7 +6,6 @@ DB, Redis, and E5 model are fully mocked — no infrastructure needed.
 
 from __future__ import annotations
 
-import pickle
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -28,7 +27,7 @@ def _make_emb_768(seed: int = 1) -> np.ndarray:
 
 
 def _make_emb_bytes(seed: int = 1) -> bytes:
-    return pickle.dumps(_make_emb_768(seed), protocol=5)
+    return _make_emb_768(seed).astype(np.float32).tobytes()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -103,7 +102,7 @@ class TestScoreTextContentHappy:
         session = self._run(description=DESCRIPTION, composition=COMPOSITION)
         assert session.execute.called
 
-    # #4 content_total formula: 0.40*img + 0.35*desc + 0.25*comp
+    # #4 content_total formula: 0.40*img + 0.35*desc + 0.25*comp — verify weights and arithmetic
     def test_content_total_formula(self):
         img = Decimal("0.80")
         # Use identical embeddings → cosine sim = 1.0 → both scores = 1.00
@@ -131,8 +130,24 @@ class TestScoreTextContentHappy:
 
         # Scores: desc=1.00, comp=1.00 (identical embeddings)
         # content_total = 0.40*0.80 + 0.35*1.00 + 0.25*1.00 = 0.32 + 0.35 + 0.25 = 0.92
-        update_stmt = session.execute.call_args[0][0]
         assert session.execute.called
+
+    # #4b Verify content_total formula constants and arithmetic directly
+    def test_content_total_formula_weights_and_arithmetic(self):
+        """Weights sum to 1.0 and formula gives correct Decimal result."""
+        from app.tasks.text_scoring_task import _W_COMP, _W_DESC, _W_IMAGE
+
+        assert _W_IMAGE + _W_DESC + _W_COMP == Decimal("1.00")
+
+        img = Decimal("0.80")
+        desc = Decimal("0.90")
+        comp = Decimal("0.70")
+
+        result = (
+            _W_IMAGE * img + _W_DESC * desc + _W_COMP * comp
+        ).quantize(Decimal("0.01"))
+        # 0.40*0.80 + 0.35*0.90 + 0.25*0.70 = 0.320 + 0.315 + 0.175 = 0.810
+        assert result == Decimal("0.81")
 
     # #5 content_total NOT written if image_score IS NULL
     def test_content_total_not_written_without_image_score(self):
@@ -414,28 +429,25 @@ class TestScoreTextContentAll:
 class TestE5Model:
     """Tests #19–23: E5 singleton and encoding."""
 
-    # #19 E5 singleton: model loaded only once
+    # #19 E5 singleton: model loaded only once (_load second call is no-op)
     def test_singleton_loaded_once(self):
         import app.core.e5_model as e5_mod
 
         e5_mod._model = None
         e5_mod._tokenizer = None
 
+        mock_transformers = MagicMock()
         mock_model = MagicMock()
-        mock_tokenizer = MagicMock()
+        mock_model.eval = MagicMock()
+        mock_transformers.AutoModel.from_pretrained.return_value = mock_model
+        mock_transformers.AutoTokenizer.from_pretrained.return_value = MagicMock()
 
-        with (
-            patch("app.core.e5_model.AutoModel") as mock_cls,
-            patch("app.core.e5_model.AutoTokenizer") as mock_tok_cls,
-        ):
-            mock_cls.from_pretrained.return_value = mock_model
-            mock_tok_cls.from_pretrained.return_value = mock_tokenizer
-
+        with patch.dict("sys.modules", {"transformers": mock_transformers}):
             e5_mod._load()
-            e5_mod._load()  # second call — should not reload
+            e5_mod._load()  # second call — should be no-op
 
-            mock_cls.from_pretrained.assert_called_once()
-            mock_tok_cls.from_pretrained.assert_called_once()
+            mock_transformers.AutoModel.from_pretrained.assert_called_once()
+            mock_transformers.AutoTokenizer.from_pretrained.assert_called_once()
 
         e5_mod._model = None
         e5_mod._tokenizer = None
@@ -446,30 +458,27 @@ class TestE5Model:
 
         captured = []
 
-        mock_model = MagicMock()
         mock_tokenizer = MagicMock()
 
         def fake_tokenizer(text, **kwargs):
             captured.append(text)
-            return {"input_ids": MagicMock()}
+            # Return dict with attention_mask as a real tensor-like mock
+            mask = MagicMock()
+            mask.unsqueeze.return_value.expand.return_value.float.return_value = MagicMock()
+            return {"input_ids": MagicMock(), "attention_mask": mask}
 
         mock_tokenizer.side_effect = fake_tokenizer
+
+        # Build a mock model output with mean-pool-compatible structure
+        emb_vec = _make_emb_768(1)
+        mock_model = MagicMock()
 
         e5_mod._model = mock_model
         e5_mod._tokenizer = mock_tokenizer
 
-        vec = _make_emb_768(1).reshape(1, 768)
-        mock_output = MagicMock()
-        mock_output.last_hidden_state = MagicMock()
-        mock_output.last_hidden_state.__getitem__ = MagicMock(
-            return_value=MagicMock(norm=lambda **kw: MagicMock(__truediv__=lambda s, x: MagicMock(squeeze=lambda: MagicMock(numpy=lambda: _make_emb_768(1)))))
-        )
+        mock_torch = MagicMock()
 
-        import torch
-        with (
-            patch("app.core.e5_model.torch") as mock_torch,
-            patch.object(mock_model, "__call__", return_value=mock_output),
-        ):
+        with patch.dict("sys.modules", {"torch": mock_torch}):
             try:
                 e5_mod.encode_text("тест")
             except Exception:
@@ -494,29 +503,23 @@ class TestE5Model:
     def test_zero_norm_raises(self):
         import app.core.e5_model as e5_mod
 
-        zero_vec = np.zeros(768, dtype=np.float32)
         e5_mod._model = MagicMock()
         e5_mod._tokenizer = MagicMock()
-        e5_mod._tokenizer.return_value = {}
 
-        mock_output = MagicMock()
-        last_hidden = MagicMock()
-        cls_token = MagicMock()
-        norm_result = MagicMock()
-        norm_result.__truediv__ = MagicMock(return_value=MagicMock(squeeze=lambda: MagicMock(numpy=lambda: zero_vec)))
-        cls_token.norm = MagicMock(return_value=norm_result)
-        last_hidden.__getitem__ = MagicMock(return_value=cls_token)
-        mock_output.last_hidden_state = last_hidden
-        e5_mod._model.return_value = mock_output
+        mask = MagicMock()
+        mask.unsqueeze.return_value.expand.return_value.float.return_value = MagicMock()
+        e5_mod._tokenizer.return_value = {"input_ids": MagicMock(), "attention_mask": mask}
 
-        import torch
-        with patch("app.core.e5_model.torch") as mock_torch:
-            mock_torch.no_grad.return_value.__enter__ = MagicMock(return_value=None)
-            mock_torch.no_grad.return_value.__exit__ = MagicMock(return_value=False)
-            # Patch the actual numpy call to return zero vec
-            with patch("app.core.e5_model.np.linalg.norm", return_value=0.0):
-                with pytest.raises(ValueError, match="zero-norm"):
-                    e5_mod.encode_text("test")
+        mock_torch = MagicMock()
+        mock_torch.no_grad.return_value.__enter__ = MagicMock(return_value=None)
+        mock_torch.no_grad.return_value.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch.dict("sys.modules", {"torch": mock_torch}),
+            patch("app.core.e5_model.np.linalg.norm", return_value=0.0),
+        ):
+            with pytest.raises(ValueError, match="near-zero embedding"):
+                e5_mod.encode_text("test")
 
         e5_mod._model = None
         e5_mod._tokenizer = None
@@ -530,12 +533,13 @@ class TestE5Model:
 class TestRedisClient768:
     """Tests #24–25: Redis shape validation for text embeddings."""
 
-    # #24 Redis wrong-shape embedding (512,) stored under :desc → None returned
+    # #24 Wrong-shape embedding (512 floats) stored under :desc (expects 768) → None
     def test_wrong_shape_512_for_desc_returns_none(self):
         from app.core.redis_client import get_embedding
 
+        # 512 floats × 4 bytes = 2048 bytes, expected (768,) → shape mismatch
         wrong = np.zeros(512, dtype=np.float32)
-        payload = pickle.dumps(wrong, protocol=5)
+        payload = wrong.tobytes()
 
         with patch("app.core.redis_client._get_client") as mock_client:
             client = MagicMock()
@@ -544,11 +548,12 @@ class TestRedisClient768:
             result = get_embedding(str(SKU_A_ID), field="desc")
             assert result is None
 
-    # #25 Pickle wrong type (dict) → None returned
-    def test_wrong_type_dict_returns_none(self):
+    # #25 Non-float32 byte count (not divisible by 4) → frombuffer error → None
+    def test_unaligned_bytes_returns_none(self):
         from app.core.redis_client import get_embedding
 
-        bad = pickle.dumps({"not": "ndarray"}, protocol=5)
+        # 10 bytes — not divisible by 4 → np.frombuffer raises ValueError
+        bad = b"x" * 10
 
         with patch("app.core.redis_client._get_client") as mock_client:
             client = MagicMock()

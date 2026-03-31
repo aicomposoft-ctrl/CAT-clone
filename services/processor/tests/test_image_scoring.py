@@ -13,7 +13,6 @@ Tests are grouped by task:
 
 from __future__ import annotations
 
-import pickle
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -69,34 +68,30 @@ class TestComputeClipEmbedding:
 
     # #4 MinIO transient failure → retry
     def test_minio_transient_failure_triggers_retry(self):
-        task = MagicMock()
-        task.request.retries = 0
-        task.retry = MagicMock(side_effect=Exception("retry"))
+        from app.tasks.clip_embedding_task import compute_clip_embedding
 
-        with (
-            patch(
-                "app.tasks.clip_embedding_task.download_object",
-                side_effect=ConnectionError("timeout"),
-            ),
-            patch("app.tasks.clip_embedding_task.compute_clip_embedding", task),
+        self_mock = MagicMock()
+        self_mock.request.retries = 0
+        self_mock.retry = MagicMock(side_effect=Exception("retried"))
+
+        with patch(
+            "app.tasks.clip_embedding_task.download_object",
+            side_effect=ConnectionError("timeout"),
         ):
-            from app.tasks.clip_embedding_task import compute_clip_embedding
+            with pytest.raises(Exception, match="retried"):
+                # __wrapped__.__func__ gives the unbound function for bind=True tasks
+                compute_clip_embedding.__wrapped__.__func__(self_mock, str(SKU_A_ID), REF_S3_KEY)
 
-            # Patch the task instance retry mechanism
-            with patch(
-                "app.tasks.clip_embedding_task.download_object",
-                side_effect=ConnectionError("timeout"),
-            ):
-                with pytest.raises(Exception):
-                    # Simulate task body execution with bound self
-                    self_mock = MagicMock()
-                    self_mock.request.retries = 0
-                    self_mock.retry = MagicMock(side_effect=Exception("retried"))
-                    compute_clip_embedding.__wrapped__(self_mock, str(SKU_A_ID), REF_S3_KEY)
-                self_mock.retry.assert_called_once()
+        self_mock.retry.assert_called_once()
 
     # #5 MinIO permanent failure → log error, no Redis write
     def test_minio_permanent_failure_no_redis_write(self):
+        from app.tasks.clip_embedding_task import compute_clip_embedding
+
+        self_mock = MagicMock()
+        self_mock.request.retries = 3  # max retries exhausted
+        self_mock.retry = MagicMock(side_effect=Exception("no more retries"))
+
         with (
             patch(
                 "app.tasks.clip_embedding_task.download_object",
@@ -104,12 +99,8 @@ class TestComputeClipEmbedding:
             ),
             patch("app.tasks.clip_embedding_task.set_embedding") as mock_set,
         ):
-            self_mock = MagicMock()
-            self_mock.request.retries = 3  # max retries exhausted
-            self_mock.retry = MagicMock(side_effect=Exception("no more retries"))
             try:
-                from app.tasks.clip_embedding_task import compute_clip_embedding
-                compute_clip_embedding.__wrapped__(self_mock, str(SKU_A_ID), REF_S3_KEY)
+                compute_clip_embedding.__wrapped__.__func__(self_mock, str(SKU_A_ID), REF_S3_KEY)
             except Exception:
                 pass
             mock_set.assert_not_called()
@@ -356,7 +347,7 @@ class TestScoreImageContent:
             ),
         ):
             with pytest.raises(Exception, match="retrying"):
-                score_image_content.__wrapped__(self_mock, str(CS_ID), str(SKU_A_ID), S3_KEY)
+                score_image_content.__wrapped__.__func__(self_mock, str(CS_ID), str(SKU_A_ID), S3_KEY)
 
         self_mock.retry.assert_called_once()
 
@@ -381,7 +372,7 @@ class TestScoreImageContent:
             patch("app.tasks.image_scoring_task.get_db_session", return_value=session),
         ):
             try:
-                score_image_content.__wrapped__(self_mock, str(CS_ID), str(SKU_A_ID), S3_KEY)
+                score_image_content.__wrapped__.__func__(self_mock, str(CS_ID), str(SKU_A_ID), S3_KEY)
             except Exception:
                 pass
 
@@ -570,40 +561,33 @@ class TestClipModel:
 
         session.execute.assert_called_once()
 
-    # #31 CLIP singleton: model loaded only once (encode_image calls _load once)
-    def test_clip_singleton_loaded_once(self, normalized_embedding):
+    # #31 CLIP singleton: model loaded only once (_load second call is no-op)
+    def test_clip_singleton_loaded_once(self):
         import app.core.clip_model as clip_mod
 
         clip_mod._model = None
         clip_mod._processor = None
 
+        # Patch sys.modules so lazy imports inside _load() work without real transformers
+        mock_transformers = MagicMock()
         mock_model = MagicMock()
-        mock_model.get_image_features.return_value = MagicMock(
-            __getitem__=lambda s, i: MagicMock(numpy=lambda: normalized_embedding * 1.0)
-        )
-        mock_proc = MagicMock()
-        mock_proc.return_value = {}
+        mock_model.eval = MagicMock()
+        mock_transformers.CLIPModel.from_pretrained.return_value = mock_model
+        mock_transformers.CLIPProcessor.from_pretrained.return_value = MagicMock()
 
-        with (
-            patch("app.core.clip_model.CLIPModel") as mock_cls,
-            patch("app.core.clip_model.CLIPProcessor") as mock_proc_cls,
-            patch("app.core.clip_model.torch"),
-        ):
-            mock_cls.from_pretrained.return_value = mock_model
-            mock_proc_cls.from_pretrained.return_value = mock_proc
-
+        with patch.dict("sys.modules", {"transformers": mock_transformers, "torch": MagicMock()}):
             clip_mod._load()
-            clip_mod._load()  # second call — should not reload
+            clip_mod._load()  # second call — should be no-op
 
-            mock_cls.from_pretrained.assert_called_once()
-            mock_proc_cls.from_pretrained.assert_called_once()
+            mock_transformers.CLIPModel.from_pretrained.assert_called_once()
+            mock_transformers.CLIPProcessor.from_pretrained.assert_called_once()
 
         # Reset
         clip_mod._model = None
         clip_mod._processor = None
 
-    # #32 Embedding shape validated before store (shape (512,))
-    def test_embedding_shape_check(self, normalized_embedding):
+    # #32 Embedding stored as raw float32 bytes (no pickle), shape (512,) on load
+    def test_embedding_stored_as_raw_bytes_shape_512(self, normalized_embedding):
         assert normalized_embedding.shape == (512,)
         from app.core.redis_client import set_embedding
 
@@ -613,15 +597,17 @@ class TestClipModel:
             set_embedding(str(SKU_A_ID), normalized_embedding, field="image")
             client.setex.assert_called_once()
             payload = client.setex.call_args[0][2]
-            loaded = pickle.loads(payload)
+            # Must be raw bytes, not pickle
+            loaded = np.frombuffer(payload, dtype=np.float32)
             assert isinstance(loaded, np.ndarray)
             assert loaded.shape == (512,)
 
-    # #33 Pickle deserialization of wrong type → log error, get_embedding returns None
-    def test_pickle_wrong_type_returns_none(self):
+    # #33 Wrong byte count → frombuffer yields wrong shape → get_embedding returns None
+    def test_wrong_byte_count_returns_none(self):
         from app.core.redis_client import get_embedding
 
-        bad_payload = pickle.dumps({"not": "an ndarray"}, protocol=5)
+        # 100 floats × 4 bytes = 400 bytes, expected (512,) → shape mismatch → None
+        bad_payload = np.zeros(100, dtype=np.float32).tobytes()
 
         with patch("app.core.redis_client._get_client") as mock_client:
             client = MagicMock()
