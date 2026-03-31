@@ -138,6 +138,14 @@ Scenario: Orchestrator fetches all orgs but tasks stay isolated
 | 23 | CLIP model loaded only once per process (singleton) | clip_model |
 | 24 | cosine_sim of identical images ≈ 1.0 | score_image_content |
 | 25 | cosine_sim of unrelated images < 0.5 | score_image_content |
+| 26 | Duplicate orchestrator run (clock drift) → 0 tasks dispatched (idempotent) | score_image_content_all |
+| 27 | Redis connection lost during ref_emb GET → skip + warning, no DB write | score_image_content |
+| 28 | Zero-norm embedding (norm < 1e-8) → ValueError logged, task skips | clip_model / score_image_content |
+| 29 | Expired Redis TTL → key absent, treated same as missing (skip + warning) | score_image_content |
+| 30 | 1×1 pixel placeholder image → valid CLIP input, low cosine sim score computed | score_image_content |
+| 31 | CLIP singleton: second task invocation does NOT reload model (call count = 1) | clip_model |
+| 32 | Embedding shape validated before Redis store: assert ndarray.shape == (512,) | compute_clip_embedding |
+| 33 | Pickle deserialization of wrong type (e.g. dict) → log error, skip task | score_image_content |
 
 ---
 
