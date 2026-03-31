@@ -19,7 +19,14 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_EXPECTED_SHAPE = (512,)
+# Valid embedding shapes per field:
+#   image → CLIP ViT-B/32: (512,)
+#   desc, comp → multilingual-e5-base: (768,)
+_SHAPE_BY_FIELD: dict[str, tuple[int, ...]] = {
+    "image": (512,),
+    "desc": (768,),
+    "comp": (768,),
+}
 _REDIS_TTL = 2592000  # 30 days
 
 
@@ -68,11 +75,12 @@ def get_embedding(sku_id: str, field: str = "image") -> np.ndarray | None:
         )
         return None
 
-    if obj.shape != _EXPECTED_SHAPE:
+    expected_shape = _SHAPE_BY_FIELD.get(field, (512,))
+    if obj.shape != expected_shape:
         logger.error(
             "Unexpected embedding shape for key %s: expected %s, got %s",
             key,
-            _EXPECTED_SHAPE,
+            expected_shape,
             obj.shape,
         )
         return None

@@ -1,0 +1,94 @@
+"""
+Multilingual-E5-base model singleton for the processor service.
+
+Loads intfloat/multilingual-e5-base once per worker process and caches it.
+Used for encoding collected product text (description, composition).
+
+Model: intfloat/multilingual-e5-base
+  Input:  str (prepended with "query: " prefix per e5 protocol)
+  Output: np.ndarray shape (768,), L2-normalized
+  RAM:    ~1.1 GB per worker (CPU weights)
+
+E5 query-document protocol:
+  Reference texts (stored as embeddings): encoded with "passage: " prefix
+    → done by API's compute_text_embedding task
+  Collected texts (scored here):          encoded with "query: " prefix
+    → this module
+
+Thread safety:
+  _load() is NOT thread-safe on first call. Celery prefork workers are
+  single-threaded per process — safe. Do NOT use with gevent/eventlet.
+"""
+
+from __future__ import annotations
+
+import logging
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+_MODEL_ID = "intfloat/multilingual-e5-base"
+
+_model = None
+_tokenizer = None
+
+
+def _load() -> None:
+    """Load E5 model + tokenizer into module-level singletons (once per process)."""
+    global _model, _tokenizer
+    if _model is not None:
+        return
+    from transformers import AutoModel, AutoTokenizer
+
+    logger.info("Loading E5 model %s …", _MODEL_ID)
+    _tokenizer = AutoTokenizer.from_pretrained(_MODEL_ID)
+    _model = AutoModel.from_pretrained(_MODEL_ID)
+    _model.eval()
+    logger.info("E5 model loaded")
+
+
+def encode_text(text: str) -> np.ndarray:
+    """
+    Encode text with multilingual-e5-base.
+
+    Prepends "query: " prefix (e5 query-document protocol — collected texts
+    are queries; reference texts were encoded as "passage: " by the API).
+
+    Args:
+        text: raw product text (description or composition)
+
+    Returns:
+        np.ndarray of shape (768,), L2-normalized.
+
+    Raises:
+        ValueError: if the resulting embedding has near-zero norm (< 1e-8)
+    """
+    import torch
+
+    _load()
+
+    prefixed = "query: " + text
+    inputs = _tokenizer(
+        prefixed,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512,
+        padding=True,
+    )
+    with torch.no_grad():
+        outputs = _model(**inputs)
+        # CLS token embedding → shape [1, 768]
+        emb = outputs.last_hidden_state[:, 0, :]
+        emb = emb / emb.norm(dim=-1, keepdim=True)  # L2 normalize
+
+    vec: np.ndarray = emb.squeeze().numpy()  # shape (768,)
+
+    norm = float(np.linalg.norm(vec))
+    if norm < 1e-8:
+        raise ValueError(
+            f"E5 produced a near-zero embedding (norm={norm:.2e}) — "
+            "text may be degenerate or model malfunction"
+        )
+
+    return vec

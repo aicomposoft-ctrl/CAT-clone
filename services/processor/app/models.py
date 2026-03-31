@@ -65,6 +65,11 @@ class ContentScore(Base):
         UUID(as_uuid=True), ForeignKey("sku_platforms.id"), nullable=False
     )
     scored_at: Mapped[date] = mapped_column(Date(), nullable=False)
+    collected_description: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
+    collected_composition: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
     collected_image_url: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
     image_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    description_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    composition_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    content_total: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
