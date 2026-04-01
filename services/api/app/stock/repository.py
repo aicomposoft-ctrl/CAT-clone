@@ -89,8 +89,9 @@ async def upsert_plans(
 
     try:
         result = await db.execute(upsert_stmt)
+        rows = list(result.scalars().all())
         await db.commit()
-        return list(result.scalars().all())
+        return rows
     except SQLAlchemyError:
         await db.rollback()
         raise

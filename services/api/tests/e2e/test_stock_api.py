@@ -248,3 +248,153 @@ class TestDeleteDistributionPlan:
         plan_id = uuid.uuid4()
         response = await client.delete(f"/api/v1/stock/distribution-plan/{plan_id}")
         assert response.status_code == 401
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cross-tenant isolation
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestCrossTenantIsolation:
+    async def test_list_plans_returns_only_own_org_data(self, client, db_session):
+        """Org B cannot see Org A's distribution plans via GET listing."""
+        from app.catalog.models import Brand, Platform, SKU
+        from app.stock.models import DistributionPlan
+
+        # Create Org A and Org B
+        org_a = Organization(id=ORG_A_ID, name="Org A", slug="org-a-iso", plan="pro")
+        org_b = Organization(id=ORG_B_ID, name="Org B", slug="org-b-iso", plan="pro")
+        db_session.add_all([org_a, org_b])
+        await db_session.flush()
+
+        # Users for each org
+        user_a = User(
+            id=uuid.uuid4(),
+            org_id=ORG_A_ID,
+            email="user-a-iso@test.com",
+            password_hash=hash_password("pass"),
+            role="manager",
+        )
+        user_b = User(
+            id=uuid.uuid4(),
+            org_id=ORG_B_ID,
+            email="user-b-iso@test.com",
+            password_hash=hash_password("pass"),
+            role="manager",
+        )
+        db_session.add_all([user_a, user_b])
+        await db_session.flush()
+
+        # Brand + SKU for Org A
+        brand_a = Brand(id=uuid.uuid4(), org_id=ORG_A_ID, name="Brand A", type="client")
+        db_session.add(brand_a)
+        await db_session.flush()
+
+        sku_a = SKU(
+            id=uuid.uuid4(),
+            org_id=ORG_A_ID,
+            brand_id=brand_a.id,
+            name="SKU A",
+            barcode="ORG_A_BARCODE_01",
+        )
+        db_session.add(sku_a)
+        await db_session.flush()
+
+        # Platform (global)
+        platform = Platform(id=uuid.uuid4(), name="TestPlatform-Iso")
+        db_session.add(platform)
+        await db_session.flush()
+
+        # Distribution plan belonging to Org A
+        plan_a = DistributionPlan(
+            id=uuid.uuid4(),
+            sku_id=sku_a.id,
+            platform_id=platform.id,
+            group_name="Group A",
+            plan_tt_count=100,
+            week_number=10,
+            year=2026,
+        )
+        db_session.add(plan_a)
+        await db_session.flush()
+
+        # Org A user lists plans — should see plan_a
+        resp_a = await client.get(
+            "/api/v1/stock/distribution-plan",
+            headers=_auth_headers(user_a),
+        )
+        assert resp_a.status_code == 200
+        data_a = resp_a.json()
+        assert data_a["total"] >= 1
+        plan_ids_a = [item["id"] for item in data_a["items"]]
+        assert str(plan_a.id) in plan_ids_a
+
+        # Org B user lists plans — must NOT see plan_a
+        resp_b = await client.get(
+            "/api/v1/stock/distribution-plan",
+            headers=_auth_headers(user_b),
+        )
+        assert resp_b.status_code == 200
+        data_b = resp_b.json()
+        plan_ids_b = [item["id"] for item in data_b["items"]]
+        assert str(plan_a.id) not in plan_ids_b, (
+            "CROSS-TENANT LEAK: Org B can see Org A's distribution plan!"
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# File-level validation (no service mock — tests real service logic)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestFileValidation:
+    async def test_upload_rejects_missing_required_column(self, client, manager_user):
+        """CSV missing 'year' column → 422 with informative message."""
+        csv_content = (
+            "sku_barcode,platform_name,group_name,plan_tt_count,week_number\n"
+            "111,WB,GroupA,100,12\n"
+        )
+        response = await client.post(
+            "/api/v1/stock/distribution-plan",
+            files={"file": ("plan.csv", csv_content.encode(), "text/csv")},
+            headers=_auth_headers(manager_user),
+        )
+        assert response.status_code == 422
+        assert "Missing columns" in response.json()["detail"]
+
+    async def test_upload_rejects_headers_only_csv(self, client, manager_user):
+        """CSV with only the header row (no data) → 422."""
+        csv_content = (
+            "sku_barcode,platform_name,group_name,plan_tt_count,week_number,year\n"
+        )
+        response = await client.post(
+            "/api/v1/stock/distribution-plan",
+            files={"file": ("plan.csv", csv_content.encode(), "text/csv")},
+            headers=_auth_headers(manager_user),
+        )
+        assert response.status_code == 422
+        assert "no data rows" in response.json()["detail"].lower()
+
+    async def test_upload_handles_header_with_trailing_spaces(self, client, manager_user):
+        """CSV column names with trailing spaces must be normalised, not rejected."""
+        from unittest.mock import AsyncMock, patch
+        from app.stock.schemas import DistributionPlanUploadResponse
+
+        mock_result = DistributionPlanUploadResponse(imported=0, errors=[])
+        with patch(
+            "app.stock.service.repository.lookup_skus_by_barcode",
+            new=AsyncMock(return_value={}),
+        ), patch(
+            "app.stock.service.repository.lookup_platforms_by_name",
+            new=AsyncMock(return_value={}),
+        ):
+            # Columns have trailing spaces
+            csv_content = (
+                " sku_barcode , platform_name , group_name , plan_tt_count , week_number , year \n"
+                "111,WB,GroupA,100,12,2026\n"
+            )
+            response = await client.post(
+                "/api/v1/stock/distribution-plan",
+                files={"file": ("plan.csv", csv_content.encode(), "text/csv")},
+                headers=_auth_headers(manager_user),
+            )
+        # Should not get 422 for "Missing columns" — header stripping must work
+        assert response.status_code == 200

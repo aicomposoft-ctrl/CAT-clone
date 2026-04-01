@@ -19,8 +19,8 @@ from app.stock.schemas import DistributionPlanRow, DistributionPlanUploadRespons
 
 logger = logging.getLogger(__name__)
 
-_MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
 _MAX_ROWS = 10_000
+_MAX_ERRORS = 100  # cap error list to prevent DoS via response bloat
 
 REQUIRED_COLUMNS = frozenset(
     {"sku_barcode", "platform_name", "group_name", "plan_tt_count", "week_number", "year"}
@@ -135,11 +135,16 @@ async def upload_distribution_plan(
     encoding = _detect_encoding(raw_bytes)
     try:
         text = raw_bytes.decode(encoding)
-    except UnicodeDecodeError:
-        text = raw_bytes.decode("cp1251", errors="replace")
+    except UnicodeDecodeError as exc:
+        raise ServiceValidationError(
+            f"File encoding error: unable to decode as {encoding}. "
+            "Please save the file in UTF-8 encoding and re-upload."
+        ) from exc
 
-    # Step 2: CSV header validation
+    # Step 2: CSV header validation (strip column names to handle trailing spaces)
     reader = csv.DictReader(io.StringIO(text))
+    if reader.fieldnames:
+        reader.fieldnames = [f.strip() for f in reader.fieldnames]
     actual_columns = set(reader.fieldnames or [])
     missing = REQUIRED_COLUMNS - actual_columns
     if missing:
@@ -185,7 +190,7 @@ async def upload_distribution_plan(
                 RowError(
                     row=row.row_index,
                     field="sku_barcode",
-                    message=f"SKU with barcode '{row.sku_barcode}' not found in your organisation",
+                    message="SKU barcode not found in your organisation",
                 )
             )
         else:
@@ -238,7 +243,11 @@ async def upload_distribution_plan(
                 "Database error during import. Verify CSV data and retry."
             ) from exc
 
-    return DistributionPlanUploadResponse(imported=imported_count, errors=row_errors)
+    # Cap error list to prevent response bloat on malformed files
+    return DistributionPlanUploadResponse(
+        imported=imported_count,
+        errors=row_errors[:_MAX_ERRORS],
+    )
 
 
 async def list_distribution_plans(

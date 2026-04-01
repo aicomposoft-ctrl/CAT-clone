@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
-_ALLOWED_CONTENT_TYPES = {"text/csv", "application/csv", "application/octet-stream"}
+_ALLOWED_CONTENT_TYPES = {"text/csv", "application/csv"}
 
 
 @router.post(
