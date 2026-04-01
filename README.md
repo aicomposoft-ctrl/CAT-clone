@@ -73,8 +73,8 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | 7 | Лента scraper | P0 | 2 | 8 | ✅ Done |
 | 8 | Content scoring (image) | P0 | 3 | 13 | ✅ Done |
 | 9 | Content scoring (text) | P0 | 3 | 8 | ✅ Done |
-| 10 | Stock plan upload | P0 | 3 | 5 | 🔲 Next |
-| 11 | Distribution dashboard | P0 | 4 | 13 | 🔲 |
+| 10 | Stock plan upload | P0 | 3 | 5 | ✅ Done |
+| 11 | Distribution dashboard | P0 | 4 | 13 | 🔄 In Progress |
 | 12 | Excel Export (Content) | P0 | 4 | 8 | 🔲 |
 | 13 | Excel Export (Stock) | P0 | 4 | 8 | 🔲 |
 | 14 | Email alerts | P0 | 5 | 8 | 🔲 |
@@ -87,10 +87,10 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 
 **Sprint 1:** Полностью завершён ✅ (Auth · SKU CRUD · Reference Upload S3)
 **Sprint 2:** Полностью завершён ✅ (WB · Ozon · Самокат · Лента scrapers)
-**Sprint 3:** Полностью завершён ✅ (Content scoring image · Content scoring text)
-**Sprint 4:** Stock plan upload · Distribution dashboard · Excel Export · Email alerts — 🔲 Next
+**Sprint 3:** Полностью завершён ✅ (Content scoring image · Content scoring text · Stock plan upload)
+**Sprint 4:** Distribution dashboard 🔄 · Excel Export 🔲 · Email alerts 🔲 — In Progress
 
-To implement next: `/feature stock-distribution`
+To implement next: Distribution dashboard Phase 3 (frontend scaffold + implementation)
 
 ## License
 
