@@ -74,7 +74,7 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | 8 | Content scoring (image) | P0 | 3 | 13 | ✅ Done |
 | 9 | Content scoring (text) | P0 | 3 | 8 | ✅ Done |
 | 10 | Stock plan upload | P0 | 3 | 5 | ✅ Done |
-| 11 | Distribution dashboard | P0 | 4 | 13 | 🔄 In Progress |
+| 11 | Distribution dashboard | P0 | 4 | 13 | ✅ Done |
 | 12 | Excel Export (Content) | P0 | 4 | 8 | 🔲 |
 | 13 | Excel Export (Stock) | P0 | 4 | 8 | 🔲 |
 | 14 | Email alerts | P0 | 5 | 8 | 🔲 |
