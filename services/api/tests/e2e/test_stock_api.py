@@ -398,3 +398,132 @@ class TestFileValidation:
             )
         # Should not get 422 for "Missing columns" — header stripping must work
         assert response.status_code == 200
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Distribution dashboard — list with joined fields + filters
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def _create_plan_fixture(db_session, org_id, barcode, platform_name, week, year):
+    """Helper: create brand, sku, platform, plan and return (plan, sku, platform)."""
+    brand = Brand(id=uuid.uuid4(), org_id=org_id, name=f"Brand-{barcode}", type="client")
+    db_session.add(brand)
+    await db_session.flush()
+
+    sku = SKU(
+        id=uuid.uuid4(),
+        org_id=org_id,
+        brand_id=brand.id,
+        name=f"SKU-{barcode}",
+        barcode=barcode,
+    )
+    db_session.add(sku)
+    await db_session.flush()
+
+    platform = Platform(id=uuid.uuid4(), name=platform_name)
+    db_session.add(platform)
+    await db_session.flush()
+
+    plan = DistributionPlan(
+        id=uuid.uuid4(),
+        sku_id=sku.id,
+        platform_id=platform.id,
+        group_name="Group X",
+        plan_tt_count=50,
+        week_number=week,
+        year=year,
+    )
+    db_session.add(plan)
+    await db_session.flush()
+    return plan, sku, platform
+
+
+class TestListWithJoinedFields:
+    async def test_list_returns_platform_name_and_sku_barcode(
+        self, client, db_session, org_a, manager_user
+    ):
+        """GET listing must include platform_name and sku_barcode from JOINs."""
+        plan, sku, platform = await _create_plan_fixture(
+            db_session, ORG_A_ID, "BARCODE-001", "WB-Test", week=20, year=2026
+        )
+        response = await client.get(
+            "/api/v1/stock/distribution-plan",
+            headers=_auth_headers(manager_user),
+        )
+        assert response.status_code == 200
+        items = response.json()["items"]
+        plan_item = next((i for i in items if i["id"] == str(plan.id)), None)
+        assert plan_item is not None, "Created plan not found in response"
+        assert plan_item["platform_name"] == "WB-Test"
+        assert plan_item["sku_barcode"] == "BARCODE-001"
+
+    async def test_list_filter_by_week_returns_only_matching_rows(
+        self, client, db_session, org_a, manager_user
+    ):
+        """?week_number=15 must return only week-15 plans, not other weeks."""
+        plan_w15, _, _ = await _create_plan_fixture(
+            db_session, ORG_A_ID, "BARCODE-W15", "WB-W15", week=15, year=2026
+        )
+        plan_w20, _, _ = await _create_plan_fixture(
+            db_session, ORG_A_ID, "BARCODE-W20", "WB-W20", week=20, year=2026
+        )
+        response = await client.get(
+            "/api/v1/stock/distribution-plan?week_number=15&year=2026",
+            headers=_auth_headers(manager_user),
+        )
+        assert response.status_code == 200
+        items = response.json()["items"]
+        ids = [i["id"] for i in items]
+        assert str(plan_w15.id) in ids
+        assert str(plan_w20.id) not in ids
+
+    async def test_list_week_out_of_range_returns_422(self, client, manager_user):
+        """?week_number=99 must be rejected by FastAPI query validation."""
+        response = await client.get(
+            "/api/v1/stock/distribution-plan?week_number=99",
+            headers=_auth_headers(manager_user),
+        )
+        assert response.status_code == 422
+
+    async def test_list_filter_by_platform_id(
+        self, client, db_session, org_a, manager_user
+    ):
+        """?platform_id=<uuid> must return only plans for that platform."""
+        plan_a, _, platform_a = await _create_plan_fixture(
+            db_session, ORG_A_ID, "BARCODE-PA", "Platform-A", week=30, year=2026
+        )
+        plan_b, _, _ = await _create_plan_fixture(
+            db_session, ORG_A_ID, "BARCODE-PB", "Platform-B", week=30, year=2026
+        )
+        response = await client.get(
+            f"/api/v1/stock/distribution-plan?platform_id={platform_a.id}",
+            headers=_auth_headers(manager_user),
+        )
+        assert response.status_code == 200
+        items = response.json()["items"]
+        ids = [i["id"] for i in items]
+        assert str(plan_a.id) in ids
+        assert str(plan_b.id) not in ids
+
+
+class TestDeletePlanSuccess:
+    async def test_delete_existing_plan_returns_204(
+        self, client, db_session, org_a, manager_user
+    ):
+        """DELETE on an existing plan owned by the user's org returns 204."""
+        plan, _, _ = await _create_plan_fixture(
+            db_session, ORG_A_ID, "BARCODE-DEL", "WB-Del", week=40, year=2026
+        )
+        response = await client.delete(
+            f"/api/v1/stock/distribution-plan/{plan.id}",
+            headers=_auth_headers(manager_user),
+        )
+        assert response.status_code == 204
+
+        # Verify plan is gone from listing
+        list_resp = await client.get(
+            "/api/v1/stock/distribution-plan",
+            headers=_auth_headers(manager_user),
+        )
+        ids = [i["id"] for i in list_resp.json()["items"]]
+        assert str(plan.id) not in ids

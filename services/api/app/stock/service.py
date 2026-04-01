@@ -273,7 +273,7 @@ async def list_distribution_plans(
         limit=size,
         offset=offset,
     )
-    rows = [DistributionPlanRow.model_validate(plan) for plan in items]
+    rows = [DistributionPlanRow(**item) for item in items]
     return rows, total
 
 

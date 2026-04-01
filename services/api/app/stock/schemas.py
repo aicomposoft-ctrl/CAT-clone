@@ -28,12 +28,12 @@ class DistributionPlanRow(BaseModel):
     id: UUID
     sku_id: UUID
     platform_id: UUID
+    platform_name: str       # resolved via JOIN with platforms table
+    sku_barcode: str | None  # resolved via JOIN with skus table (nullable in schema)
     group_name: str
     plan_tt_count: int
     week_number: int
     year: int
-
-    model_config = {"from_attributes": True}
 
 
 class DistributionPlanPage(BaseModel):

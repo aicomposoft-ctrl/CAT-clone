@@ -105,39 +105,48 @@ async def list_plans(
     year: int | None,
     limit: int,
     offset: int,
-) -> tuple[list[DistributionPlan], int]:
+) -> tuple[list[dict], int]:
     """
     Paginated listing of distribution plans for the given org.
     Tenant isolation enforced by JOIN to skus.org_id — mandatory, never remove.
-    Returns (items, total_count).
+    Returns (items as dicts, total_count). Dicts include platform_name and sku_barcode
+    resolved via JOINs to avoid N+1 lookups in the service layer.
     """
-    base_query = (
-        select(DistributionPlan)
+    base_stmt = (
+        select(
+            DistributionPlan.id,
+            DistributionPlan.sku_id,
+            DistributionPlan.platform_id,
+            Platform.name.label("platform_name"),
+            SKU.barcode.label("sku_barcode"),
+            DistributionPlan.group_name,
+            DistributionPlan.plan_tt_count,
+            DistributionPlan.week_number,
+            DistributionPlan.year,
+        )
         .join(SKU, SKU.id == DistributionPlan.sku_id)
+        .join(Platform, Platform.id == DistributionPlan.platform_id)
         .where(SKU.org_id == org_id)
     )
 
     if platform_id is not None:
-        base_query = base_query.where(DistributionPlan.platform_id == platform_id)
+        base_stmt = base_stmt.where(DistributionPlan.platform_id == platform_id)
     if week_number is not None:
-        base_query = base_query.where(DistributionPlan.week_number == week_number)
+        base_stmt = base_stmt.where(DistributionPlan.week_number == week_number)
     if year is not None:
-        base_query = base_query.where(DistributionPlan.year == year)
+        base_stmt = base_stmt.where(DistributionPlan.year == year)
 
-    count_query = select(func.count()).select_from(base_query.subquery())
-    total_result = await db.execute(count_query)
-    total = total_result.scalar_one()
+    count_query = select(func.count()).select_from(base_stmt.subquery())
+    total = (await db.execute(count_query)).scalar_one()
 
     data_query = (
-        base_query
+        base_stmt
         .order_by(DistributionPlan.year.desc(), DistributionPlan.week_number.desc())
         .limit(limit)
         .offset(offset)
     )
-    data_result = await db.execute(data_query)
-    items = list(data_result.scalars().all())
-
-    return items, total
+    rows = (await db.execute(data_query)).mappings().all()
+    return [dict(r) for r in rows], total
 
 
 async def delete_plan(
