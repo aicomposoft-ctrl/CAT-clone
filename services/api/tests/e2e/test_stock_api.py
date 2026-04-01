@@ -506,6 +506,36 @@ class TestListWithJoinedFields:
         assert str(plan_b.id) not in ids
 
 
+class TestCrossTenantDelete:
+    async def test_org_b_cannot_delete_org_a_plan(self, client, db_session):
+        """Org B guessing Org A's plan UUID must receive 404, not 204."""
+        plan_a, _, _ = await _create_plan_fixture(
+            db_session, ORG_A_ID, "BARCODE-XD", "WB-XD", week=45, year=2026
+        )
+        # Create Org B user (org_b created inline since fixture is org_a only)
+        org_b = Organization(id=ORG_B_ID, name="Org B XD", slug="org-b-xd-2", plan="pro")
+        db_session.add(org_b)
+        await db_session.flush()
+        user_b = User(
+            id=uuid.uuid4(),
+            org_id=ORG_B_ID,
+            email="user-b-xd@test.com",
+            password_hash=hash_password("pass"),
+            role="manager",
+        )
+        db_session.add(user_b)
+        await db_session.flush()
+
+        response = await client.delete(
+            f"/api/v1/stock/distribution-plan/{plan_a.id}",
+            headers=_auth_headers(user_b),
+        )
+        assert response.status_code == 404, (
+            "Cross-tenant DELETE must return 404, not 204 — "
+            "Org B guessed Org A's plan UUID"
+        )
+
+
 class TestDeletePlanSuccess:
     async def test_delete_existing_plan_returns_204(
         self, client, db_session, org_a, manager_user

@@ -1,4 +1,5 @@
 import { Alert, Button, Typography } from 'antd'
+import { useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { DistributionFilters } from './components/DistributionFilters'
@@ -8,9 +9,9 @@ import { useDeletePlan } from './hooks/useDeletePlan'
 import { useDistributionPlans } from './hooks/useDistributionPlans'
 import type { DistributionFilters as Filters } from './types'
 
-const currentYear = new Date().getFullYear()
-const currentWeek = getISOWeek(new Date())
-
+// Computed once at module load — acceptable; a user keeping the app open across
+// midnight can refresh. Keeping these outside the component avoids recreating
+// them on every render.
 function getISOWeek(date: Date): number {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
   d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7))
@@ -18,13 +19,17 @@ function getISOWeek(date: Date): number {
   return Math.ceil(((d.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7)
 }
 
+const DEFAULT_YEAR = new Date().getFullYear()
+const DEFAULT_WEEK = getISOWeek(new Date())
+const PAGE_SIZE = 50
+
 function parseFilters(params: URLSearchParams): Filters {
   return {
-    week_number: params.get('week') ? Number(params.get('week')) : currentWeek,
-    year: params.get('year') ? Number(params.get('year')) : currentYear,
+    week_number: params.get('week') ? Number(params.get('week')) : DEFAULT_WEEK,
+    year: params.get('year') ? Number(params.get('year')) : DEFAULT_YEAR,
     platform_id: params.get('platform_id') ?? undefined,
     page: params.get('page') ? Number(params.get('page')) : 1,
-    size: 50,
+    size: PAGE_SIZE,
   }
 }
 
@@ -39,7 +44,11 @@ function filtersToParams(filters: Filters): Record<string, string> {
 
 export default function DistributionPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const filters = parseFilters(searchParams)
+
+  // Memoised so downstream hooks receive a stable object reference and only
+  // re-render when URL params actually change.
+  const filters = useMemo(() => parseFilters(searchParams), [searchParams])
+
   const { data, isLoading, isError, refetch } = useDistributionPlans(filters)
   const deleteMutation = useDeletePlan()
   const { role } = useAuth()

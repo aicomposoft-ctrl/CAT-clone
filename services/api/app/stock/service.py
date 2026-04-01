@@ -40,8 +40,8 @@ class _ParsedRow:
     plan_tt_count: int
     week_number: int
     year: int
-    sku_id: UUID = field(default=None)      # filled after barcode lookup
-    platform_id: UUID = field(default=None)  # filled after platform lookup
+    sku_id: UUID | None = field(default=None)      # filled after barcode lookup
+    platform_id: UUID | None = field(default=None)  # filled after platform lookup
 
 
 def _detect_encoding(raw_bytes: bytes) -> str:
