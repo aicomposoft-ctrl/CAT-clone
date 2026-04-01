@@ -5,6 +5,22 @@
 
 ---
 
+## Prerequisites
+
+**Frontend scaffold does not yet exist.** `services/frontend/` is empty. Implementation of this feature must either:
+- (A) bootstrap the React/TypeScript/Ant Design project first (recommended — separate task), then add this feature, OR
+- (B) implement the scaffold as part of this feature's Phase 3.
+
+Dependencies assumed to exist before this feature can be built:
+- `services/frontend/src/api/client.ts` — Axios instance with JWT interceptor
+- `services/frontend/src/hooks/useAuth.ts` — returns `{ role, userId, orgId }`
+- Main React Router setup with `/distribution` route slot
+- Ant Design provider + global message config
+
+**If scaffolding in parallel:** The backend changes (schema + repository) can be done independently and first.
+
+---
+
 ## Component Hierarchy
 
 ```

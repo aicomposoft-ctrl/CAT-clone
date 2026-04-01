@@ -74,12 +74,27 @@ async def list_distribution_plans(...) -> tuple[list[DistributionPlanRow], int]:
 
 ---
 
+## Frontend: Filter Normalisation Utility
+
+```typescript
+// Normalise filters before use in queryKey — omit undefined values to prevent
+// React Query cache misses when keys contain undefined fields.
+function normaliseFilters(f: DistributionFilters): Record<string, unknown> {
+    return Object.fromEntries(
+        Object.entries(f).filter(([, v]) => v !== undefined && v !== null)
+    )
+}
+```
+
+---
+
 ## Frontend: useDistributionPlans hook
 
 ```typescript
 function useDistributionPlans(filters: DistributionFilters) {
+    const normalisedFilters = normaliseFilters(filters)
     return useQuery({
-        queryKey: ['distribution-plans', filters],
+        queryKey: ['distribution-plans', normalisedFilters],
         queryFn: () => distributionApi.list(filters),
         staleTime: 30_000,
         placeholderData: keepPreviousData,  // no flash on filter change
@@ -92,7 +107,9 @@ function useDistributionPlans(filters: DistributionFilters) {
 ## Frontend: useDeletePlan hook
 
 ```typescript
-function useDeletePlan(queryClient: QueryClient) {
+// RQ v5 convention: call useQueryClient() inside the hook, not as a parameter.
+function useDeletePlan() {
+    const queryClient = useQueryClient()
     return useMutation({
         mutationFn: (id: string) => distributionApi.deletePlan(id),
         onSuccess: () => {
