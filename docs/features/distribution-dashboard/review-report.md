@@ -18,7 +18,7 @@
 
 ---
 
-## Fixed Issues
+## Fixed Issues (all Critical + Major)
 
 ### CRITICAL — Agent 1: queryKey / queryFn mismatch in useDistributionPlans
 - **File:** `src/pages/Distribution/hooks/useDistributionPlans.ts`
@@ -34,6 +34,26 @@
 - **File:** `src/hooks/useAuth.ts`
 - **Problem:** `useAuth` decoded JWT but never checked `exp` claim — expired session showed restricted UI controls.
 - **Fix:** Added `exp` check; redirects to `/login` if token is expired.
+
+### CRITICAL — Agent 1: `_ParsedRow` UUID fields typed non-Optional but default None
+- **File:** `services/api/app/stock/service.py`, lines 43-44
+- **Problem:** `sku_id: UUID = field(default=None)` — lie to the type system; `None` could reach PostgreSQL upsert and cause a runtime error.
+- **Fix:** Changed to `UUID | None`.
+
+### MAJOR — Agent 1: `parseFilters` not memoised — new object every render
+- **File:** `src/pages/Distribution/index.tsx`
+- **Problem:** `parseFilters(searchParams)` called on every render, producing a new `filters` object and making `useCallback` deps stale.
+- **Fix:** Wrapped in `useMemo(() => parseFilters(searchParams), [searchParams])`.
+
+### MAJOR — Agent 1: `getISOWeek` used before declaration (hoisting bomb)
+- **File:** `src/pages/Distribution/index.tsx`
+- **Problem:** `const currentWeek = getISOWeek(new Date())` appeared before `function getISOWeek`. Works due to function hoisting but dangerous if refactored to arrow function.
+- **Fix:** Moved `getISOWeek` before its usage; renamed constants to `DEFAULT_WEEK`, `DEFAULT_YEAR`, `PAGE_SIZE`.
+
+### MAJOR — Agent 3+5: No cross-tenant DELETE test
+- **File:** `services/api/tests/e2e/test_stock_api.py`
+- **Problem:** No test verifying Org B cannot delete Org A's plan by guessing its UUID.
+- **Fix:** Added `TestCrossTenantDelete.test_org_b_cannot_delete_org_a_plan` → expects 404.
 
 ### MAJOR — Agent 4: COUNT query wrapped full JOIN unnecessarily
 - **File:** `services/api/app/stock/repository.py`
@@ -53,10 +73,17 @@
 | D5 | Agent 5 | No `year`-only filter repository test | Minor gap — year filter shares same code path as week filter |
 | D6 | Agent 5 | No repository-level `delete_plan` test | Covered at E2E level; acceptable |
 | D7 | Agent 5 | No frontend component tests | Phase 1 scope — frontend test infrastructure not yet bootstrapped |
+| D8 | Agent 1 | `list_plans` two queries without `BEGIN` (phantom total) | SQLAlchemy AsyncSession has implicit `autobegin` transaction — both queries run in same txn; not actually a bug |
+| D9 | Agent 2 | No rate limiting on upload endpoint | Whole-API gap, separate task |
+| D10 | Agent 2 | MIME magic bytes not checked (CSV) | Defense-in-depth gap; CSV parser rejects non-CSV; deferred |
+| D11 | Agent 2 | JWT in localStorage (XSS risk) | Known trade-off; CSP headers mitigate; deferred |
 
 ---
 
 ## Final Status
 
-All Critical and Major issues resolved. 28/28 tests pass.
+All Critical and Major issues resolved. 29/29 tests pass.
 Feature is ready to merge.
+
+Also added migration 0006 to drop duplicate index `idx_distribution_plans_sku_platform_week`
+(redundant with the implicit unique index created by the UNIQUE constraint).
