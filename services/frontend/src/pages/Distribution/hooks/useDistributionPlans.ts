@@ -9,10 +9,12 @@ function normaliseFilters(filters: DistributionFilters): Record<string, unknown>
 }
 
 export function useDistributionPlans(filters: DistributionFilters) {
-  const normalisedFilters = normaliseFilters(filters)
+  // Normalise once — both queryKey and queryFn use the same object
+  // so the cache key always matches the actual fetch arguments.
+  const normalisedFilters = normaliseFilters(filters) as DistributionFilters
   return useQuery({
     queryKey: ['distribution-plans', normalisedFilters],
-    queryFn: () => distributionApi.list(filters),
+    queryFn: () => distributionApi.list(normalisedFilters),
     staleTime: 30_000,
     placeholderData: keepPreviousData,
   })

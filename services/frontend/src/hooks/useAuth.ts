@@ -21,10 +21,16 @@ export function useAuth(): AuthState {
   const token = localStorage.getItem('access_token')
   if (!token) {
     window.location.href = '/login'
-    // Satisfy TS — unreachable after redirect
     return { userId: '', orgId: '', role: 'viewer' }
   }
   const claims = parseJwt(token)
+  // Redirect on expiry so the UI never shows restricted controls for expired sessions.
+  const exp = claims.exp as number | undefined
+  if (exp && Date.now() / 1000 > exp) {
+    localStorage.removeItem('access_token')
+    window.location.href = '/login'
+    return { userId: '', orgId: '', role: 'viewer' }
+  }
   return {
     userId: (claims.sub as string) ?? '',
     orgId: (claims.org_id as string) ?? '',

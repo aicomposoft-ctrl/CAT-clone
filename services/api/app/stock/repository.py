@@ -136,8 +136,21 @@ async def list_plans(
     if year is not None:
         base_stmt = base_stmt.where(DistributionPlan.year == year)
 
-    count_query = select(func.count()).select_from(base_stmt.subquery())
-    total = (await db.execute(count_query)).scalar_one()
+    # Build a lean count query — only SKU JOIN is needed for tenant isolation.
+    # The Platform JOIN is not required for counting (only for selecting names).
+    count_stmt = (
+        select(func.count())
+        .select_from(DistributionPlan)
+        .join(SKU, SKU.id == DistributionPlan.sku_id)
+        .where(SKU.org_id == org_id)
+    )
+    if platform_id is not None:
+        count_stmt = count_stmt.where(DistributionPlan.platform_id == platform_id)
+    if week_number is not None:
+        count_stmt = count_stmt.where(DistributionPlan.week_number == week_number)
+    if year is not None:
+        count_stmt = count_stmt.where(DistributionPlan.year == year)
+    total = (await db.execute(count_stmt)).scalar_one()
 
     data_query = (
         base_stmt

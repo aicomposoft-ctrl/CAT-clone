@@ -1,5 +1,4 @@
 import { Alert, Button, Typography } from 'antd'
-import { useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { DistributionFilters } from './components/DistributionFilters'
@@ -60,13 +59,6 @@ export default function DistributionPage() {
     [filters, setSearchParams]
   )
 
-  const handleDelete = useCallback(
-    (id: string) => {
-      deleteMutation.mutate(id)
-    },
-    [deleteMutation]
-  )
-
   return (
     <div style={{ padding: '24px' }}>
       <div
@@ -102,7 +94,7 @@ export default function DistributionPage() {
           page={filters.page ?? 1}
           loading={isLoading}
           canDelete={canEdit}
-          onDelete={handleDelete}
+          onDelete={(id) => deleteMutation.mutate(id)}
           onPageChange={handlePageChange}
         />
       )}
