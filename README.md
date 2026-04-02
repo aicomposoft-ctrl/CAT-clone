@@ -75,9 +75,9 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 | 9 | Content scoring (text) | P0 | 3 | 8 | ✅ Done |
 | 10 | Stock plan upload | P0 | 3 | 5 | ✅ Done |
 | 11 | Distribution dashboard | P0 | 4 | 13 | ✅ Done |
-| 12 | Excel Export (Content) | P0 | 4 | 8 | 🔲 |
-| 13 | Excel Export (Stock) | P0 | 4 | 8 | 🔲 |
-| 14 | Email alerts | P0 | 5 | 8 | 🔲 |
+| 12 | Excel Export (Content) | P0 | 4 | 8 | ✅ Done |
+| 13 | Excel Export (Stock) | P0 | 4 | 8 | ✅ Done |
+| 14 | Email alerts | P0 | 5 | 8 | 🔄 In Progress |
 | 15 | Price monitoring | P1 | 6 | 13 | 🔲 |
 | 16 | Reviews NLP | P1 | 7 | 13 | 🔲 |
 | 17 | Excel Export (Reviews) | P1 | 7 | 5 | 🔲 |
@@ -88,9 +88,10 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 **Sprint 1:** Полностью завершён ✅ (Auth · SKU CRUD · Reference Upload S3)
 **Sprint 2:** Полностью завершён ✅ (WB · Ozon · Самокат · Лента scrapers)
 **Sprint 3:** Полностью завершён ✅ (Content scoring image · Content scoring text · Stock plan upload)
-**Sprint 4:** Distribution dashboard 🔄 · Excel Export 🔲 · Email alerts 🔲 — In Progress
+**Sprint 4:** Полностью завершён ✅ (Distribution dashboard · Excel Export Content · Excel Export Stock)
+**Sprint 5:** Email alerts 🔄 — In Progress
 
-To implement next: Distribution dashboard Phase 3 (frontend scaffold + implementation)
+To implement next: Email alerts (content score drops, out-of-stock, distribution gaps)
 
 ## License
 
