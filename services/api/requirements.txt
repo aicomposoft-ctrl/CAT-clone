@@ -24,3 +24,6 @@ pydantic-settings==2.5.2
 
 # Form data (required for OAuth2PasswordBearer tokenUrl compatibility)
 python-multipart==0.0.12
+
+# Excel generation
+openpyxl==3.1.5

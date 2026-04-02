@@ -21,6 +21,7 @@ from app.core.config import get_settings, validate_required_secrets
 from app.auth.router import router as auth_router
 from app.catalog.router import brand_router, platform_router, sku_platform_router, sku_router
 from app.catalog.reference_router import reference_router
+from app.reports.router import router as reports_router
 from app.stock.router import router as stock_router
 
 logging.basicConfig(
@@ -67,3 +68,4 @@ app.include_router(platform_router, prefix="/api/v1/platforms", tags=["platforms
 app.include_router(sku_platform_router, prefix="/api/v1/sku-platforms", tags=["sku-platforms"])
 app.include_router(reference_router, prefix="/api/v1/skus", tags=["reference"])
 app.include_router(stock_router, prefix="/api/v1/stock", tags=["stock"])
+app.include_router(reports_router, prefix="/api/v1/reports", tags=["reports"])
