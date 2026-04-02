@@ -14,7 +14,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -53,6 +53,7 @@ class ContentScoreRead(Base):
         Numeric(5, 2), nullable=True
     )
     in_stock: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    warehouse_qty: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
