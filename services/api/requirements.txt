@@ -27,3 +27,6 @@ python-multipart==0.0.12
 
 # Excel generation
 openpyxl==3.1.5
+
+# Async email (optional — alerts degrade gracefully if not installed)
+aiosmtplib==3.0.2

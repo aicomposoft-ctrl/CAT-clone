@@ -18,6 +18,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 
 from app.core.config import get_settings, validate_required_secrets
+from app.alerts.router import router as alerts_router
 from app.auth.router import router as auth_router
 from app.catalog.router import brand_router, platform_router, sku_platform_router, sku_router
 from app.catalog.reference_router import reference_router
@@ -69,3 +70,4 @@ app.include_router(sku_platform_router, prefix="/api/v1/sku-platforms", tags=["s
 app.include_router(reference_router, prefix="/api/v1/skus", tags=["reference"])
 app.include_router(stock_router, prefix="/api/v1/stock", tags=["stock"])
 app.include_router(reports_router, prefix="/api/v1/reports", tags=["reports"])
+app.include_router(alerts_router, prefix="/api/v1/alerts", tags=["alerts"])
