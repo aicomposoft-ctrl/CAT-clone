@@ -62,36 +62,48 @@ See [docs/Architecture.md](docs/Architecture.md) for full system design.
 
 ## Feature Roadmap
 
-| # | Feature | Priority | Sprint | SP | Status |
-|---|---------|----------|--------|----|--------|
-| 1 | Auth (JWT + RBAC) | P0 | 1 | 5 | ✅ Done |
-| 2 | SKU CRUD + bulk upload | P0 | 1 | 8 | ✅ Done |
-| 3 | Reference upload (S3) | P0 | 1 | 5 | ✅ Done |
-| 4 | WB scraper | P0 | 2 | 13 | ✅ Done |
-| 5 | Ozon scraper | P0 | 2 | 13 | ✅ Done |
-| 6 | Самокат scraper | P0 | 2 | 8 | ✅ Done |
-| 7 | Лента scraper | P0 | 2 | 8 | ✅ Done |
-| 8 | Content scoring (image) | P0 | 3 | 13 | ✅ Done |
-| 9 | Content scoring (text) | P0 | 3 | 8 | ✅ Done |
-| 10 | Stock plan upload | P0 | 3 | 5 | ✅ Done |
-| 11 | Distribution dashboard | P0 | 4 | 13 | ✅ Done |
-| 12 | Excel Export (Content) | P0 | 4 | 8 | ✅ Done |
-| 13 | Excel Export (Stock) | P0 | 4 | 8 | ✅ Done |
-| 14 | Email alerts | P0 | 5 | 8 | 🔄 In Progress |
-| 15 | Price monitoring | P1 | 6 | 13 | 🔲 |
-| 16 | Reviews NLP | P1 | 7 | 13 | 🔲 |
-| 17 | Excel Export (Reviews) | P1 | 7 | 5 | 🔲 |
-| 18 | Web Dashboard | P1 | 8 | 21 | 🔲 |
-| 19 | API public endpoints | P1 | 9 | 13 | 🔲 |
-| 20 | Multi-client support | P1 | 10 | 13 | 🔲 |
+SPARC column: P1=docs · P2=validation · P3=impl · P4=review. ✅ all phases · ⚠️ debt · 🔲 not started
+
+| # | Feature | Priority | Sprint | SP | Status | SPARC |
+|---|---------|----------|--------|----|--------|-------|
+| 1 | Auth (JWT + RBAC) | P0 | 1 | 5 | ✅ Done | ✅ P1·P2·P3·P4 |
+| 2 | SKU CRUD + bulk upload | P0 | 1 | 8 | ✅ Done | ⚠️ P1·P2·P3 (no P4) |
+| 3 | Reference upload (S3) | P0 | 1 | 5 | ✅ Done | ✅ P1·P2·P3·P4 |
+| 4 | WB scraper | P0 | 2 | 13 | ✅ Done | ✅ P1·P2·P3·P4 |
+| 5 | Ozon scraper | P0 | 2 | 13 | ✅ Done | ⚠️ P1·P2·P3 (no P4) |
+| 6 | Самокат scraper | P0 | 2 | 8 | ✅ Done | ✅ P1·P2·P3·P4 |
+| 7 | Лента scraper | P0 | 2 | 8 | ✅ Done | ✅ P1·P2·P3·P4 |
+| 8 | Content scoring (image) | P0 | 3 | 13 | ✅ Done | ✅ P1·P2·P3·P4 |
+| 9 | Content scoring (text) | P0 | 3 | 8 | ✅ Done | ⚠️ P1(4/5)·P2·P3·P4 |
+| 10 | Stock plan upload | P0 | 3 | 5 | ✅ Done | ⚠️ P1(2/5)·P3·P4 (no P2) |
+| 11 | Distribution dashboard | P0 | 4 | 13 | ✅ Done | ✅ P1·P2·P3·P4 |
+| 12 | Excel Export (Content) | P0 | 4 | 8 | ✅ Done | ✅ P1·P2·P3·P4 |
+| 13 | Excel Export (Stock) | P0 | 4 | 8 | ✅ Done | ✅ P1·P2·P3·P4 |
+| 14 | Email alerts | P0 | 5 | 8 | ⚠️ Done (2 criticals) | ✅ P1·P2·P3·P4 |
+| 15 | Price monitoring | P1 | 6 | 13 | 🔲 | 🔲 |
+| 16 | Reviews NLP | P1 | 7 | 13 | 🔲 | 🔲 |
+| 17 | Excel Export (Reviews) | P1 | 7 | 5 | 🔲 | 🔲 |
+| 18 | Web Dashboard | P1 | 8 | 21 | 🔲 | 🔲 |
+| 19 | API public endpoints | P1 | 9 | 13 | 🔲 | 🔲 |
+| 20 | Multi-client support | P1 | 10 | 13 | 🔲 | 🔲 |
 
 **Sprint 1:** Полностью завершён ✅ (Auth · SKU CRUD · Reference Upload S3)
 **Sprint 2:** Полностью завершён ✅ (WB · Ozon · Самокат · Лента scrapers)
 **Sprint 3:** Полностью завершён ✅ (Content scoring image · Content scoring text · Stock plan upload)
 **Sprint 4:** Полностью завершён ✅ (Distribution dashboard · Excel Export Content · Excel Export Stock)
-**Sprint 5:** Email alerts 🔄 — In Progress
+**Sprint 5:** Email alerts ⚠️ — Implemented, 2 critical issues pending fix
 
-To implement next: Email alerts (content score drops, out-of-stock, distribution gaps)
+### SPARC Lifecycle Debt
+
+| Feature | Что отсутствует | Приоритет |
+|---------|----------------|-----------|
+| SKU CRUD (#2) | `docs/features/sku-crud/review-report.md` (Phase 4) | Medium |
+| Ozon scraper (#5) | `docs/features/ozon-scraper/review-report.md` (Phase 4) | Medium |
+| Content scoring text (#9) | `docs/features/content-scoring-text/sparc/Architecture.md` (Phase 1) | Low |
+| Stock plan upload (#10) | `sparc/PRD.md`, `sparc/Specification.md`, `sparc/Refinement.md`, `validation-report.md` (Phase 1+2) | Medium |
+| Email alerts (#14) | 2 Critical bugs: savepoint rollback + SMTP startup validation | **High — fix before deploy** |
+
+To implement next: Fix Email alerts criticals → then Price monitoring (Sprint 6)
 
 ## License
 
