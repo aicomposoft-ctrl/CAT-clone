@@ -110,8 +110,8 @@ class AlertEvent(Base):
     Dedup constraint: (config_id, sku_platform_id, scored_at) is UNIQUE
     so re-running the check job on the same day never produces duplicate events.
 
-    Tenant isolation: no direct org_id. All queries MUST join through
-    alert_configs.org_id — never query alert_events directly.
+    Tenant isolation: org_id is denormalised from config.org_id at insert time,
+    enabling direct filtering without a JOIN on every query.
     """
 
     __tablename__ = "alert_events"
@@ -123,11 +123,17 @@ class AlertEvent(Base):
             name="uq_alert_events_no_duplicate",
         ),
         Index("idx_alert_events_config", "config_id"),
+        Index("idx_alert_events_org_id", "org_id"),
         Index("idx_alert_events_pending", "is_sent", "triggered_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
     )
     config_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

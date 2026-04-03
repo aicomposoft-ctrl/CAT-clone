@@ -134,8 +134,8 @@ async def send_alert_email(ctx: AlertEmailContext) -> None:
         start_tls=use_tls,
     )
     logger.info(
-        "Alert email sent: type=%s recipients=%s rows=%d",
+        "Alert email sent: type=%s recipients_count=%d rows=%d",
         ctx.alert_type,
-        ctx.recipients,
+        len(ctx.recipients),
         len(ctx.rows),
     )

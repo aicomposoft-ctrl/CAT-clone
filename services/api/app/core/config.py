@@ -88,10 +88,10 @@ class Settings(BaseSettings):
 
 def validate_required_secrets() -> None:
     """
-    Validate that JWT_SECRET and POSTGRES_URL are present in the environment.
+    Validate required secrets at startup. Calls sys.exit(1) on any violation.
 
-    Calls sys.exit(1) if any are missing — service must not start without secrets.
-    This is the early-exit guard before pydantic-settings loads the full config.
+    Always required: JWT_SECRET, POSTGRES_URL.
+    Conditionally required: if SMTP_HOST is set, SMTP_PASSWORD must also be set.
 
     Call this in FastAPI lifespan BEFORE any DB connections.
     """
@@ -102,6 +102,13 @@ def validate_required_secrets() -> None:
             "Missing required secrets: %s. "
             "Set them in environment or .env file before starting.",
             missing,
+        )
+        sys.exit(1)
+
+    if os.environ.get("SMTP_HOST") and not os.environ.get("SMTP_PASSWORD"):
+        logger.critical(
+            "SMTP_HOST is configured but SMTP_PASSWORD is missing. "
+            "Set SMTP_PASSWORD or unset SMTP_HOST to disable email alerts."
         )
         sys.exit(1)
 

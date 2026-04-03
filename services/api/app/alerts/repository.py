@@ -11,15 +11,17 @@ via INSERT OR IGNORE (SQLite) / ON CONFLICT DO NOTHING (PostgreSQL).
 """
 
 import json
+import logging
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import delete, func, select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from app.alerts.models import AlertConfig, AlertEvent
 from app.catalog.models import Brand, Platform, SKU, SKUPlatform
@@ -208,25 +210,24 @@ async def get_oos_candidates(
     return [dict(r._mapping) for r in result.all()]
 
 
-async def already_alerted(
+async def get_alerted_sku_platforms(
     db: AsyncSession,
     config_id: uuid.UUID,
-    sku_platform_id: uuid.UUID,
     scored_at: date,
-) -> bool:
-    """Return True if an event already exists for this config × sku_platform × date."""
-    stmt = select(func.count()).where(
+) -> set[uuid.UUID]:
+    """Return set of sku_platform_ids already alerted for this config + date."""
+    stmt = select(AlertEvent.sku_platform_id).where(
         AlertEvent.config_id == config_id,
-        AlertEvent.sku_platform_id == sku_platform_id,
         AlertEvent.scored_at == scored_at,
     )
-    count = (await db.execute(stmt)).scalar_one()
-    return count > 0
+    result = await db.execute(stmt)
+    return {row[0] for row in result.all()}
 
 
 async def create_event(
     db: AsyncSession,
     config_id: uuid.UUID,
+    org_id: uuid.UUID,
     sku_platform_id: uuid.UUID,
     scored_at: date,
     alert_type: str,
@@ -236,9 +237,13 @@ async def create_event(
     """
     Insert an AlertEvent. Returns None if the dedup constraint fires
     (already exists for this config × sku_platform × date).
+
+    Uses a savepoint (begin_nested) so an IntegrityError only rolls back
+    this single INSERT — the surrounding session transaction is preserved.
     """
     event = AlertEvent(
         config_id=config_id,
+        org_id=org_id,
         sku_platform_id=sku_platform_id,
         scored_at=scored_at,
         alert_type=alert_type,
@@ -246,12 +251,12 @@ async def create_event(
         value_after=value_after,
         is_sent=False,
     )
-    db.add(event)
     try:
-        await db.flush()
+        async with db.begin_nested():
+            db.add(event)
+            await db.flush()
         return event
     except IntegrityError:
-        await db.rollback()
         return None
 
 
@@ -267,6 +272,11 @@ async def mark_events_sent(
         .values(is_sent=True, sent_at=datetime.now(tz=timezone.utc))
     )
     await db.execute(stmt)
+    logger.info(
+        "Alert events marked sent: count=%d event_ids=%s",
+        len(event_ids),
+        [str(e) for e in event_ids],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -286,11 +296,7 @@ async def list_events(
     Return paginated alert events for org, ordered newest first.
     Tenant isolation via JOIN through alert_configs.org_id.
     """
-    base = (
-        select(AlertEvent)
-        .join(AlertConfig, AlertEvent.config_id == AlertConfig.id)
-        .where(AlertConfig.org_id == org_id)
-    )
+    base = select(AlertEvent).where(AlertEvent.org_id == org_id)
     if alert_type is not None:
         base = base.where(AlertEvent.alert_type == alert_type)
     if is_sent is not None:

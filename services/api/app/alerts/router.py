@@ -11,6 +11,8 @@ Endpoints:
 """
 
 import logging
+import os
+import time
 from typing import Optional
 from uuid import UUID
 
@@ -31,6 +33,46 @@ from app.alerts.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+_RATE_LIMIT_CHECK = 5  # max requests per minute per org for POST /check
+
+
+async def _enforce_check_rate_limit(org_id: UUID) -> None:
+    """
+    Sliding-window rate limit: 5 req/min per org for POST /check.
+
+    Uses Redis sorted sets. If Redis is unavailable (REDIS_URL not set or
+    connection error), the limit is not applied — dev environments continue
+    to work without Redis.
+    """
+    redis_url = os.environ.get("REDIS_URL")
+    if not redis_url:
+        return
+    try:
+        from redis.asyncio import from_url as async_redis_from_url
+
+        redis = await async_redis_from_url(redis_url, decode_responses=True)
+        key = f"rate:alerts:check:{org_id}"
+        now_ms = int(time.time() * 1000)
+        window_ms = 60 * 1000
+
+        pipe = redis.pipeline()
+        pipe.zremrangebyscore(key, 0, now_ms - window_ms)
+        pipe.zadd(key, {str(now_ms): now_ms})
+        pipe.zcard(key)
+        pipe.expire(key, 60)
+        results = await pipe.execute()
+        await redis.aclose()
+
+        if results[2] > _RATE_LIMIT_CHECK:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="RATE_LIMIT_EXCEEDED",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Rate limit check failed (Redis unavailable?) — proceeding: %s", exc)
 
 router = APIRouter()
 
@@ -137,7 +179,9 @@ async def run_alert_check(
     Manually trigger the alert check for the authenticated admin's org.
     Useful for testing alert configs without waiting for the scheduled run.
     Emails are sent if SMTP_HOST is configured.
+    Rate limited to 5 requests/minute per org.
     """
+    await _enforce_check_rate_limit(current_user.org_id)
     try:
         return await service.check_and_send_alerts(
             db=db,

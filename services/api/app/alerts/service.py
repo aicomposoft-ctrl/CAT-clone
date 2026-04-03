@@ -162,21 +162,26 @@ async def check_and_send_alerts(
         new_events_by_config[config.id] = []
         candidates = await _get_candidates(db, config, check_date)
 
+        # Bulk pre-load already-alerted sku_platform_ids for this config + date
+        # to avoid N+1 SELECT queries (one per candidate).
+        already_alerted_set = await repository.get_alerted_sku_platforms(
+            db, config.id, check_date
+        )
+
         for candidate in candidates:
             sp_id = candidate["sku_platform_id"]
-            if await repository.already_alerted(db, config.id, sp_id, check_date):
+            if sp_id in already_alerted_set:
                 continue
 
-            value_before: Optional[Decimal] = None
             value_after: Optional[Decimal] = candidate.get("content_total")
 
             event = await repository.create_event(
                 db=db,
                 config_id=config.id,
+                org_id=config.org_id,
                 sku_platform_id=sp_id,
                 scored_at=check_date,
                 alert_type=config.alert_type,
-                value_before=value_before,
                 value_after=value_after,
             )
             if event is not None:

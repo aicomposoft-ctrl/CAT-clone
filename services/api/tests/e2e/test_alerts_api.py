@@ -452,12 +452,13 @@ async def test_check_oos_creates_event(db_session, org_a):
     db_session.add(config)
     await db_session.flush()
 
-    with patch("app.alerts.service.send_alert_email", new_callable=AsyncMock):
+    with patch("app.alerts.service.send_alert_email", new_callable=AsyncMock) as mock_send:
         result = await alert_service.check_and_send_alerts(
             db=db_session, org_id=org_a.id, org_name="Org A", check_date=check_date
         )
 
     assert result.events_created == 1
+    mock_send.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -576,6 +577,114 @@ def test_render_html_contains_sku_name():
     assert "ART-1" in html
     assert "45.5" in html
     assert "WB" in html
+
+
+@pytest.mark.asyncio
+async def test_check_email_failure_event_persists(db_session, org_a):
+    """When send_alert_email raises, the event must persist with is_sent=False."""
+    from app.alerts import repository, service as alert_service
+
+    platform = Platform(id=uuid.uuid4(), name="WB-fail", type="marketplace")
+    db_session.add(platform)
+
+    brand = Brand(id=uuid.uuid4(), org_id=org_a.id, name="Brand Fail")
+    db_session.add(brand)
+
+    sku = SKU(id=uuid.uuid4(), org_id=org_a.id, brand_id=brand.id, name="Fail SKU", article="F-001")
+    db_session.add(sku)
+
+    sp = SKUPlatform(id=uuid.uuid4(), sku_id=sku.id, platform_id=platform.id)
+    db_session.add(sp)
+
+    check_date = date(2026, 2, 1)
+    score = ContentScoreRead(
+        id=uuid.uuid4(),
+        sku_platform_id=sp.id,
+        scored_at=check_date,
+        content_total=Decimal("30.00"),
+        in_stock=True,
+        created_at=datetime.now(tz=timezone.utc),
+    )
+    db_session.add(score)
+
+    config = AlertConfig(
+        id=uuid.uuid4(),
+        org_id=org_a.id,
+        alert_type="content_drop",
+        threshold=Decimal("70.00"),
+        email_recipients='["fail@example.com"]',
+        is_active=True,
+        created_at=datetime.now(tz=timezone.utc),
+    )
+    db_session.add(config)
+    await db_session.flush()
+
+    with patch(
+        "app.alerts.service.send_alert_email",
+        new_callable=AsyncMock,
+        side_effect=Exception("SMTP timeout"),
+    ):
+        result = await alert_service.check_and_send_alerts(
+            db=db_session, org_id=org_a.id, org_name="Org A", check_date=check_date
+        )
+
+    assert result.events_created == 1
+    assert result.emails_sent == 0
+    assert len(result.errors) == 1
+    assert "SMTP timeout" in result.errors[0]
+
+    # The event must be persisted with is_sent=False
+    events, _ = await repository.list_events(db_session, org_id=org_a.id, limit=50, offset=0)
+    fail_events = [e for e in events if e.scored_at == check_date and not e.is_sent]
+    assert len(fail_events) == 1
+    assert fail_events[0].sent_at is None
+
+
+@pytest.mark.asyncio
+async def test_list_events_cross_tenant_isolation(client, viewer_user, org_b, db_session):
+    """Events belonging to org_b must not appear in org_a's event list."""
+    # Create a config + event directly for org_b
+    config_b = AlertConfig(
+        id=uuid.uuid4(),
+        org_id=org_b.id,
+        alert_type="oos",
+        email_recipients='["x@y.com"]',
+        is_active=True,
+        created_at=datetime.now(tz=timezone.utc),
+    )
+    db_session.add(config_b)
+
+    platform_b = Platform(id=uuid.uuid4(), name="WB-orgb", type="marketplace")
+    db_session.add(platform_b)
+
+    brand_b = Brand(id=uuid.uuid4(), org_id=org_b.id, name="Brand B")
+    db_session.add(brand_b)
+
+    sku_b = SKU(id=uuid.uuid4(), org_id=org_b.id, brand_id=brand_b.id, name="SKU B", article="B-001")
+    db_session.add(sku_b)
+
+    sp_b = SKUPlatform(id=uuid.uuid4(), sku_id=sku_b.id, platform_id=platform_b.id)
+    db_session.add(sp_b)
+
+    await db_session.flush()
+
+    event_b = AlertEvent(
+        id=uuid.uuid4(),
+        org_id=org_b.id,
+        config_id=config_b.id,
+        sku_platform_id=sp_b.id,
+        scored_at=date(2026, 2, 10),
+        alert_type="oos",
+        is_sent=False,
+        triggered_at=datetime.now(tz=timezone.utc),
+    )
+    db_session.add(event_b)
+    await db_session.flush()
+
+    resp = await client.get("/api/v1/alerts/events", headers=_auth(viewer_user))
+    assert resp.status_code == 200
+    event_ids = [e["id"] for e in resp.json()["items"]]
+    assert str(event_b.id) not in event_ids, "Cross-tenant event leakage detected!"
 
 
 def test_render_html_oos_type():
