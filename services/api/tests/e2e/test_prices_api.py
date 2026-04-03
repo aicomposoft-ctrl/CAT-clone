@@ -595,38 +595,38 @@ class TestPriceAnomalies:
 
 
 class TestValidateDateRange:
-    """Unit tests for _validate_date_range in service.py."""
+    """Unit tests for validate_date_range in service.py."""
 
     def test_defaults_to_30_days_back(self):
-        from app.prices.service import _validate_date_range
-        d_from, d_to = _validate_date_range(None, None)
+        from app.prices.service import validate_date_range
+        d_from, d_to = validate_date_range(None, None)
         assert d_to == date.today()
         assert (d_to - d_from).days == 30
 
     def test_inverted_range_raises(self):
-        from app.prices.service import _validate_date_range
+        from app.prices.service import validate_date_range
         import pytest
         with pytest.raises(ValueError, match="date_from must be before date_to"):
-            _validate_date_range(date(2026, 4, 1), date(2026, 3, 1))
+            validate_date_range(date(2026, 4, 1), date(2026, 3, 1))
 
     def test_range_over_366_raises(self):
-        from app.prices.service import _validate_date_range
+        from app.prices.service import validate_date_range
         import pytest
         with pytest.raises(ValueError, match="366"):
-            _validate_date_range(date(2025, 1, 1), date(2026, 6, 1))
+            validate_date_range(date(2025, 1, 1), date(2026, 6, 1))
 
     def test_exact_366_days_is_allowed(self):
-        from app.prices.service import _validate_date_range
+        from app.prices.service import validate_date_range
         d_from = date(2025, 1, 1)
         d_to = d_from + timedelta(days=366)
-        d_from_out, d_to_out = _validate_date_range(d_from, d_to)
+        d_from_out, d_to_out = validate_date_range(d_from, d_to)
         assert d_from_out == d_from
         assert d_to_out == d_to
 
     def test_same_day_is_valid(self):
-        from app.prices.service import _validate_date_range
+        from app.prices.service import validate_date_range
         d = date(2026, 3, 15)
-        d_from_out, d_to_out = _validate_date_range(d, d)
+        d_from_out, d_to_out = validate_date_range(d, d)
         assert d_from_out == d_to_out == d
 
 
@@ -713,3 +713,172 @@ class TestCrossTenantIsolation:
                 f"Expected 404 for {url} with org_B token, got {resp.status_code}"
             )
             assert resp.json()["detail"] == "SKU_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage for Agent 5 gaps
+# ---------------------------------------------------------------------------
+
+
+class TestPriceAnomaliesEdgeCases:
+    """Edge cases identified in Phase 4 review."""
+
+    @pytest.mark.asyncio
+    async def test_anomalies_threshold_zero_returns_all_changes(self, client, manager_a, sku_a):
+        """threshold=0 is a valid boundary — all price changes qualify."""
+        mock_resp = PriceAnomaliesResponse(
+            sku_id=sku_a.id,
+            threshold=0.0,
+            items=[
+                PriceAnomaly(
+                    platform_id=uuid.uuid4(),
+                    platform_name="WB",
+                    date=_today - timedelta(days=1),
+                    price_before=Decimal("100.00"),
+                    price_after=Decimal("101.00"),
+                    change_abs=Decimal("1.00"),
+                    change_pct=Decimal("1.00"),
+                    direction="up",
+                )
+            ],
+        )
+        with patch("app.prices.router.service.get_price_anomalies", new=AsyncMock(return_value=mock_resp)) as mock_svc:
+            resp = await client.get(
+                f"/api/v1/prices/anomalies?sku_id={sku_a.id}&threshold=0",
+                headers=_auth(manager_a),
+            )
+        assert resp.status_code == 200
+        _, kwargs = mock_svc.call_args
+        assert kwargs.get("threshold") == 0.0
+
+    @pytest.mark.asyncio
+    async def test_anomalies_negative_change_pct_direction_is_down(self, client, manager_a, sku_a):
+        """change_pct < 0 → direction field must be 'down'."""
+        mock_resp = PriceAnomaliesResponse(
+            sku_id=sku_a.id,
+            threshold=10.0,
+            items=[
+                PriceAnomaly(
+                    platform_id=uuid.uuid4(),
+                    platform_name="WB",
+                    date=_today - timedelta(days=2),
+                    price_before=Decimal("300.00"),
+                    price_after=Decimal("240.00"),
+                    change_abs=Decimal("-60.00"),
+                    change_pct=Decimal("-20.00"),
+                    direction="down",
+                )
+            ],
+        )
+        with patch("app.prices.router.service.get_price_anomalies", new=AsyncMock(return_value=mock_resp)):
+            resp = await client.get(
+                f"/api/v1/prices/anomalies?sku_id={sku_a.id}&threshold=10",
+                headers=_auth(manager_a),
+            )
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert item["direction"] == "down"
+        assert float(item["change_pct"]) < 0
+
+    @pytest.mark.asyncio
+    async def test_anomalies_direction_invalid_value_returns_422(self, client, manager_a, sku_a):
+        """direction must be 'up' | 'down' | 'both' — any other value is 422."""
+        resp = await client.get(
+            f"/api/v1/prices/anomalies?sku_id={sku_a.id}&direction=sideways",
+            headers=_auth(manager_a),
+        )
+        assert resp.status_code == 422
+
+
+class TestPriceHistoryEdgeCases:
+    """Limit boundary tests for /prices/history."""
+
+    @pytest.mark.asyncio
+    async def test_history_limit_zero_returns_422(self, client, manager_a, sku_a):
+        """limit ge=1 — zero is invalid."""
+        resp = await client.get(
+            f"/api/v1/prices/history?sku_id={sku_a.id}&limit=0",
+            headers=_auth(manager_a),
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_history_limit_over_1000_returns_422(self, client, manager_a, sku_a):
+        """limit le=1000 — 1001 is invalid."""
+        resp = await client.get(
+            f"/api/v1/prices/history?sku_id={sku_a.id}&limit=1001",
+            headers=_auth(manager_a),
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_history_limit_1000_is_valid(self, client, manager_a, sku_a):
+        """limit=1000 is the maximum allowed value."""
+        mock_resp = _make_history_response(sku_a.id, [])
+        with patch("app.prices.router.service.get_price_history", new=AsyncMock(return_value=mock_resp)) as mock_svc:
+            resp = await client.get(
+                f"/api/v1/prices/history?sku_id={sku_a.id}&limit=1000",
+                headers=_auth(manager_a),
+            )
+        assert resp.status_code == 200
+        _, kwargs = mock_svc.call_args
+        assert kwargs.get("limit") == 1000
+
+
+class TestPriceStatsEdgeCases:
+    """Single-snapshot and negative change_pct edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_stats_single_snapshot_first_equals_last(self):
+        """One snapshot: first_price == last_price, change_abs == 0, change_pct == 0."""
+        from app.prices import service
+
+        class MockRow:
+            snapshot_count = 1
+            price_min = "199.00"
+            price_max = "199.00"
+            price_avg = "199.00"
+            price_median = "199.00"
+            first_price = "199.00"
+            last_price = "199.00"
+            discount_avg = "0.00"
+
+        with patch("app.prices.repository.fetch_stats", new=AsyncMock(return_value=MockRow())):
+            result = await service.get_price_stats(
+                db=None,
+                org_id=uuid.uuid4(),
+                sku_id=uuid.uuid4(),
+                platform_id=None,
+                date_from=_today - timedelta(days=1),
+                date_to=_today,
+            )
+        assert result.change_abs == Decimal("0.00")
+        assert result.change_pct == Decimal("0.00")
+        assert result.price_min == result.price_max
+
+    @pytest.mark.asyncio
+    async def test_stats_price_decrease_yields_negative_change(self):
+        """Price drop: change_abs and change_pct are negative."""
+        from app.prices import service
+
+        class MockRow:
+            snapshot_count = 5
+            price_min = "180.00"
+            price_max = "240.00"
+            price_avg = "210.00"
+            price_median = "210.00"
+            first_price = "240.00"
+            last_price = "180.00"
+            discount_avg = "0.00"
+
+        with patch("app.prices.repository.fetch_stats", new=AsyncMock(return_value=MockRow())):
+            result = await service.get_price_stats(
+                db=None,
+                org_id=uuid.uuid4(),
+                sku_id=uuid.uuid4(),
+                platform_id=None,
+                date_from=_today - timedelta(days=7),
+                date_to=_today,
+            )
+        assert result.change_abs == Decimal("-60.00")
+        assert result.change_pct == Decimal("-25.00")

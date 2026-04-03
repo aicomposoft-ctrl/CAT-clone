@@ -30,7 +30,7 @@ from app.prices.schemas import (
 )
 
 
-def _validate_date_range(
+def validate_date_range(
     date_from: date | None,
     date_to: date | None,
     default_days_back: int = 30,
@@ -41,6 +41,7 @@ def _validate_date_range(
 
     Raises ValueError with a human-readable message on invalid input.
     The router catches ValueError and converts to HTTP 422.
+    Called from the router layer; service functions receive already-validated dates.
     """
     today = date.today()
 
@@ -63,12 +64,10 @@ async def get_price_history(
     org_id: UUID,
     sku_id: UUID,
     platform_id: UUID | None,
-    date_from: date | None,
-    date_to: date | None,
+    date_from: date,
+    date_to: date,
     limit: int,
 ) -> PriceHistoryResponse:
-    date_from, date_to = _validate_date_range(date_from, date_to)
-
     rows = await repository.fetch_history(
         db=db,
         org_id=org_id,
@@ -135,11 +134,9 @@ async def get_price_stats(
     org_id: UUID,
     sku_id: UUID,
     platform_id: UUID | None,
-    date_from: date | None,
-    date_to: date | None,
+    date_from: date,
+    date_to: date,
 ) -> PriceStats:
-    date_from, date_to = _validate_date_range(date_from, date_to)
-
     row = await repository.fetch_stats(
         db=db,
         org_id=org_id,
@@ -199,13 +196,11 @@ async def get_price_anomalies(
     org_id: UUID,
     sku_id: UUID,
     platform_id: UUID | None,
-    date_from: date | None,
-    date_to: date | None,
+    date_from: date,
+    date_to: date,
     threshold: float,
     direction: str,
 ) -> PriceAnomaliesResponse:
-    date_from, date_to = _validate_date_range(date_from, date_to)
-
     rows = await repository.fetch_anomalies(
         db=db,
         org_id=org_id,

@@ -32,7 +32,7 @@ from app.auth.models import User
 from app.catalog.repository import SKURepository
 from app.core.deps import get_current_user, get_db
 from app.prices import service
-from app.prices.service import _validate_date_range
+from app.prices.service import validate_date_range
 from app.prices.schemas import (
     PriceAnomaliesResponse,
     PriceHistoryResponse,
@@ -64,24 +64,28 @@ async def _enforce_rate_limit(user_id: UUID) -> None:
         from redis.asyncio import from_url as async_redis_from_url
 
         redis = await async_redis_from_url(redis_url, decode_responses=True)
-        key = f"rate:prices:{user_id}"
-        now_ms = int(time.time() * 1000)
-        window_ms = 60 * 1000
+        try:
+            key = f"rate:prices:{user_id}"
+            now_ms = int(time.time() * 1000)
+            window_ms = 60 * 1000
 
-        pipe = redis.pipeline()
-        pipe.zremrangebyscore(key, 0, now_ms - window_ms)
-        pipe.zcard(key)
-        pipe.zadd(key, {str(now_ms): now_ms})
-        pipe.expire(key, 60)
-        results = await pipe.execute()
+            pipe = redis.pipeline()
+            pipe.zremrangebyscore(key, 0, now_ms - window_ms)
+            pipe.zadd(key, {str(now_ms): now_ms})
+            pipe.zcard(key)
+            pipe.expire(key, 60)
+            results = await pipe.execute()
 
-        count_after_trim = results[1]
-        if count_after_trim >= _RATE_LIMIT_PRICES:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="RATE_LIMIT_EXCEEDED",
-                headers={"Retry-After": "60"},
-            )
+            # results[2] is the count AFTER adding the new entry — exact window size
+            count_in_window = results[2]
+            if count_in_window > _RATE_LIMIT_PRICES:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="RATE_LIMIT_EXCEEDED",
+                    headers={"Retry-After": "60"},
+                )
+        finally:
+            await redis.aclose()
     except HTTPException:
         raise
     except Exception:
@@ -125,7 +129,7 @@ async def get_price_history(
     await _require_sku_access(sku_id, db, current_user)
 
     try:
-        date_from, date_to = _validate_date_range(date_from, date_to)
+        date_from, date_to = validate_date_range(date_from, date_to)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
@@ -169,7 +173,7 @@ async def get_price_stats(
     await _require_sku_access(sku_id, db, current_user)
 
     try:
-        date_from, date_to = _validate_date_range(date_from, date_to)
+        date_from, date_to = validate_date_range(date_from, date_to)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
@@ -199,7 +203,7 @@ async def get_price_anomalies(
     await _require_sku_access(sku_id, db, current_user)
 
     try:
-        date_from, date_to = _validate_date_range(date_from, date_to)
+        date_from, date_to = validate_date_range(date_from, date_to)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
