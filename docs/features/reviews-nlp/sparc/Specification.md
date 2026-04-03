@@ -144,6 +144,10 @@ until the backfill Celery task runs.
 
 ## 3. Sentiment Model
 
+**Language assumption:** Russian FMCG platform reviews are ≥90% Russian-language (WB, Ozon,
+Samokat, etc.). If multi-language sets are needed in future, switch to `xlm-roberta-base`
+(104 languages). This assumption is scoped to Sprint 7.
+
 **Model:** `blanchefort/rubert-base-cased-sentiment` (HuggingFace)
 - Input: Russian review text (max 512 tokens, truncation on overflow)
 - Output: probabilities for `POSITIVE`, `NEUTRAL`, `NEGATIVE`
@@ -242,4 +246,94 @@ And task return value includes {"skipped": 1}
 Given date_from=2025-01-01, date_to=2026-06-01 (> 366 days)
 When GET /api/v1/reviews/summary?sku_id=<id>&date_from=...&date_to=...
 Then HTTP 422 with message containing "366"
+```
+
+### Scenario: Unauthenticated request rejected (all endpoints)
+```gherkin
+Given no Authorization header is provided
+When GET /api/v1/reviews/summary?sku_id=<id>
+Then HTTP 401
+Given no Authorization header is provided
+When GET /api/v1/reviews/history?sku_id=<id>
+Then HTTP 401
+Given no Authorization header is provided
+When GET /api/v1/reviews/stats?sku_id=<id>
+Then HTTP 401
+```
+
+### Scenario: Invalid sentiment enum returns 422
+```gherkin
+Given manager_a is authenticated
+When GET /api/v1/reviews/history?sku_id=<id>&sentiment=excellent
+Then HTTP 422
+```
+
+### Scenario: Zero reviews returns empty response
+```gherkin
+Given a SKU exists but has no reviews in the requested date range
+When GET /api/v1/reviews/summary?sku_id=<id>
+Then HTTP 200
+And total=0 and items=[]
+When GET /api/v1/reviews/stats?sku_id=<id>
+Then HTTP 200
+And review_count=0 and avg_rating=null and sentiment_share=null
+And weekly_trend=[]
+```
+
+### Scenario: date_from equals date_to (single day) is valid
+```gherkin
+Given date_from=2026-04-01, date_to=2026-04-01
+When GET /api/v1/reviews/summary?sku_id=<id>&date_from=2026-04-01&date_to=2026-04-01
+Then HTTP 200 (not 422)
+```
+
+### Scenario: Exactly 366-day range is valid
+```gherkin
+Given date_from=2025-04-02, date_to=2026-04-03 (exactly 366 days)
+When GET /api/v1/reviews/stats?sku_id=<id>&date_from=2025-04-02&date_to=2026-04-03
+Then HTTP 200
+```
+
+### Scenario: Rate limit exceeded returns 429
+```gherkin
+Given a user makes 61 requests to any /reviews endpoint within 60 seconds
+When the 61st request arrives
+Then HTTP 429 with Retry-After: 60 header
+```
+
+### Scenario: score_pending_reviews is idempotent
+```gherkin
+Given 10 reviews exist with non-null sentiment (already scored)
+When score_pending_reviews task runs
+Then {"scored": 0, "skipped": 0} is returned
+And no reviews are updated (WHERE sentiment IS NULL finds 0 rows)
+```
+
+### Scenario: Model unavailable triggers Celery retry
+```gherkin
+Given the rubert model raises RuntimeError during inference
+When score_pending_reviews task runs
+Then the task raises the exception
+And Celery retries up to 3 times with exponential backoff (60s, 120s, 240s)
+And all reviews remain sentiment IS NULL after final failure
+```
+
+### Scenario: Whitespace-only review text is skipped
+```gherkin
+Given a review has review_text="   " (whitespace only)
+When score_pending_reviews task runs
+Then that review is skipped (text.strip() returns "")
+And task return value includes skipped count incremented
+And that review's sentiment remains NULL
+```
+
+### Scenario: limit boundary validation for /history
+```gherkin
+Given manager_a is authenticated with valid sku_id
+When GET /api/v1/reviews/history?sku_id=<id>&limit=0
+Then HTTP 422
+When GET /api/v1/reviews/history?sku_id=<id>&limit=501
+Then HTTP 422
+When GET /api/v1/reviews/history?sku_id=<id>&limit=500
+Then HTTP 200
 ```

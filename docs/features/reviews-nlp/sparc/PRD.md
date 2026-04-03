@@ -95,11 +95,12 @@ When the score_pending_reviews Celery task runs
 Then each review is scored using rubert-base-cased-sentiment (batch=32),
   sentiment and sentiment_score columns are updated,
   and the task completes with a count of scored reviews in its return value.
-Given the ML model is unavailable
+Given the ML model is unavailable (RuntimeError during inference)
 When the task runs
-Then it raises an exception that Celery will retry (max 3 times, exponential backoff),
-  and the failed reviews remain sentiment IS NULL.
-Given a review_text is empty or NULL
+Then it raises RuntimeError, Celery retries up to 3 times with exponential backoff
+  (base 60s, multiplier 2×: 60s / 120s / 240s),
+  and all reviewed remain sentiment IS NULL after the final failed attempt.
+Given a review_text is empty, NULL, or whitespace-only
 When the task encounters it
 Then that review is skipped (sentiment remains NULL), no error raised.
 ```
