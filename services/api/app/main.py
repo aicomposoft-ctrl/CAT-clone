@@ -19,6 +19,7 @@ from fastapi import FastAPI
 
 from app.core.config import get_settings, validate_required_secrets
 from app.alerts.router import router as alerts_router
+from app.clients.router import router as clients_router
 from app.api_keys.router import router as api_keys_router
 from app.auth.router import router as auth_router
 from app.content.router import router as content_router
@@ -69,6 +70,7 @@ app = FastAPI(
 )
 
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+app.include_router(clients_router, prefix="/api/v1/clients", tags=["clients"])
 app.include_router(api_keys_router, prefix="/api/v1/api-keys", tags=["api-keys"])
 app.include_router(public_router, prefix="/api/v1/public", tags=["public"])
 app.include_router(brand_router, prefix="/api/v1/brands", tags=["brands"])

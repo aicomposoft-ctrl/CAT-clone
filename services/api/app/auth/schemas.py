@@ -13,6 +13,7 @@ Design rules (Refinement.md § 2, Pseudocode.md § 1):
 """
 
 import uuid
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -119,3 +120,39 @@ class LogoutRequest(BaseModel):
     """
 
     refresh_token: str = Field(description="Refresh JWT to revoke.")
+
+
+# ---------------------------------------------------------------------------
+# Switch client context
+# ---------------------------------------------------------------------------
+
+class SwitchClientRequest(BaseModel):
+    """
+    Body for POST /api/v1/auth/switch-client.
+
+    Pass ``client_id`` to scope the new access token to a specific client.
+    Pass ``null`` to return to all-clients mode (no client scope in token).
+    """
+
+    client_id: Optional[uuid.UUID] = Field(
+        default=None,
+        description=(
+            "UUID of the client to switch to. "
+            "Pass null to clear client context (all-clients mode)."
+        ),
+    )
+
+
+class SwitchClientTokenResponse(BaseModel):
+    """
+    Response from POST /api/v1/auth/switch-client.
+
+    Returns only a new access token — the refresh token is unaffected.
+    The frontend should replace its stored access token with this value
+    and invalidate all cached query results.
+    """
+
+    access_token: str = Field(
+        description="New short-lived JWT access token (15 min) scoped to the requested client."
+    )
+    token_type: str = Field(default="bearer", description="OAuth2 token type.")

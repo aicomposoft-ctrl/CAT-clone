@@ -24,8 +24,9 @@ from app.auth.repository import (
     RefreshTokenRepository,
     UserRepository,
 )
-from app.auth.schemas import RefreshResponse, TokenResponse, UserInfo
+from app.auth.schemas import RefreshResponse, SwitchClientRequest, SwitchClientTokenResponse, TokenResponse, UserInfo
 from app.core.security import (
+    AuthContext,
     AuthError,
     LockoutError,
     create_access_token,
@@ -227,6 +228,64 @@ async def revoke_refresh_token(
         )
         return  # silently ignore — do not reveal token existence to wrong user
     await RefreshTokenRepository.revoke(db, token_hash)
+
+
+async def switch_client_context(
+    db: AsyncSession,
+    request: SwitchClientRequest,
+    ctx: AuthContext,
+) -> SwitchClientTokenResponse:
+    """
+    Issue a new access token scoped to the requested client context.
+
+    Pseudocode.md Algorithm: switch_client_context.
+
+    - If request.client_id is not None: validate the client exists, is active,
+      and belongs to the caller's organisation. Raises PermissionError on failure
+      so the router can map it to HTTP 403 CLIENT_NOT_IN_ORG.
+    - Issues a fresh 15-minute access token with the (possibly updated) client_id
+      claim. The refresh token is untouched.
+    - Passing client_id=None clears client scope (all-clients mode).
+
+    The client ownership check is performed here (not only in get_current_user)
+    because the *current* token may carry a different client — the caller is asking
+    to switch to a new one, so we re-validate the target.
+
+    Raises:
+        PermissionError("CLIENT_NOT_IN_ORG") — client not found, inactive, or
+            belongs to a different organisation. Router maps this to HTTP 403.
+    """
+    if request.client_id is not None:
+        # Lazy import — clients module may not exist during early bootstrap.
+        from app.clients.repository import ClientRepository  # noqa: PLC0415
+
+        client = await ClientRepository.get_active_by_id_and_org(
+            db, request.client_id, ctx.org_id
+        )
+        if client is None:
+            logger.warning(
+                "auth.switch_client.rejected user_id=%s org_id=%s client_id=%s",
+                ctx.user.id,
+                ctx.org_id,
+                request.client_id,
+            )
+            raise PermissionError("CLIENT_NOT_IN_ORG")
+
+    new_token: str = create_access_token(
+        user_id=ctx.user.id,
+        org_id=ctx.org_id,
+        role=ctx.user.role,
+        client_id=request.client_id,
+    )
+
+    logger.info(
+        "auth.switch_client.success user_id=%s org_id=%s client_id=%s",
+        ctx.user.id,
+        ctx.org_id,
+        request.client_id,
+    )
+
+    return SwitchClientTokenResponse(access_token=new_token, token_type="bearer")
 
 
 async def get_user_info(

@@ -26,6 +26,7 @@ from app.catalog.schemas import (
     BrandCreateRequest,
     BrandListResponse,
     BrandResponse,
+    BrandUpdateRequest,
     BulkUploadResponse,
     PlatformListResponse,
     SKUCreateRequest,
@@ -87,7 +88,25 @@ async def list_brands(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BrandListResponse:
-    return await catalog_service.list_brands(db, user.org_id)
+    # user is AuthContext (get_current_user returns AuthContext; User annotation
+    # is kept for backward compat). client_id is None when no client context is
+    # active — list_brands returns all-org brands in that case.
+    client_id = getattr(user, "client_id", None)
+    return await catalog_service.list_brands(db, user.org_id, client_id=client_id)
+
+
+@brand_router.patch("/{brand_id}", response_model=BrandResponse)
+async def update_brand(
+    brand_id: UUID,
+    body: BrandUpdateRequest,
+    user: User = Depends(require_role("admin", "manager")),
+    db: AsyncSession = Depends(get_db),
+) -> BrandResponse:
+    """Assign (or unassign) a brand to a client via client_id."""
+    try:
+        return await catalog_service.update_brand(db, user.org_id, brand_id, body)
+    except LookupError as exc:
+        raise _domain_error(exc) from exc
 
 
 # ---------------------------------------------------------------------------

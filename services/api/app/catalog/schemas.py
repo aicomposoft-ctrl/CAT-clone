@@ -21,9 +21,15 @@ class BrandCreateRequest(BaseModel):
     type: str = Field(default="client", pattern="^(client|competitor)$")
 
 
+class BrandUpdateRequest(BaseModel):
+    """Used by PATCH /brands/{id} to assign a brand to a client (or remove the assignment)."""
+    client_id: Optional[UUID] = None
+
+
 class BrandResponse(BaseModel):
     id: UUID
     org_id: UUID
+    client_id: Optional[UUID] = None
     name: str
     type: str
     created_at: datetime

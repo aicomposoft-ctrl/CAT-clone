@@ -27,6 +27,7 @@ from app.catalog.schemas import (
     BrandCreateRequest,
     BrandListResponse,
     BrandResponse,
+    BrandUpdateRequest,
     BulkUploadResponse,
     BulkUploadRowError,
     PlatformListResponse,
@@ -62,8 +63,26 @@ async def create_brand(
     return BrandResponse.model_validate(brand)
 
 
-async def list_brands(db: AsyncSession, org_id: UUID) -> BrandListResponse:
-    brands = await BrandRepository.list_by_org(db, org_id)
+async def update_brand(
+    db: AsyncSession,
+    org_id: UUID,
+    brand_id: UUID,
+    data: BrandUpdateRequest,
+) -> BrandResponse:
+    """Assign (or unassign) a brand to a client. Raises LookupError if not found."""
+    brand = await BrandRepository.get_by_id(db, brand_id, org_id)
+    if brand is None:
+        raise LookupError("BRAND_NOT_FOUND")
+    brand = await BrandRepository.update(db, brand, client_id=data.client_id)
+    return BrandResponse.model_validate(brand)
+
+
+async def list_brands(
+    db: AsyncSession,
+    org_id: UUID,
+    client_id: Optional[UUID] = None,
+) -> BrandListResponse:
+    brands = await BrandRepository.list_by_org(db, org_id, client_id=client_id)
     return BrandListResponse(
         items=[BrandResponse.model_validate(b) for b in brands],
         total=len(brands),

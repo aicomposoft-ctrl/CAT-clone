@@ -13,6 +13,7 @@ No DB access. Pure functions — fully unit-testable without application context
 import hashlib
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -103,25 +104,73 @@ def _utcnow_dt() -> datetime:
 
 
 # ---------------------------------------------------------------------------
+# Auth context — carries user + resolved tenant/client scope
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AuthContext:
+    """
+    Dependency injection payload returned by get_current_user.
+
+    Replaces the bare User object so downstream code has access to
+    org_id and the optional client_id JWT claim without extra DB queries.
+
+    Fields:
+        user      — ORM User instance (loaded from DB).
+        org_id    — convenience alias for user.org_id (avoids attribute chains).
+        client_id — UUID extracted from the "client_id" JWT claim, or None when
+                    the token was issued without a client context (all-clients mode).
+    """
+
+    user: Any           # app.auth.models.User — typed as Any to avoid import cycle
+    org_id: UUID
+    client_id: UUID | None
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate unknown attribute access to the wrapped User object.
+
+        Allows existing code written against ``User`` (e.g. ``ctx.id``,
+        ``ctx.role``, ``ctx.email``) to continue working without modification
+        after the dependency was updated to return ``AuthContext``.
+        """
+        # __getattr__ is only called when normal lookup fails, so dataclass
+        # fields (user, org_id, client_id) are never caught here.
+        try:
+            return getattr(self.user, name)
+        except AttributeError:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            ) from None
+
+
+# ---------------------------------------------------------------------------
 # JWT — Access Token
 # ---------------------------------------------------------------------------
 
-def create_access_token(user_id: UUID, org_id: UUID, role: str) -> str:
+def create_access_token(
+    user_id: UUID,
+    org_id: UUID,
+    role: str,
+    client_id: UUID | None = None,
+) -> str:
     """
     Create a signed JWT access token.
 
     Payload fields (Architecture.md § 6):
-        sub     — user UUID (string)
-        org_id  — organisation UUID (string)
-        role    — RBAC role: "admin" | "manager" | "viewer"
-        type    — "access" (used by decode_token to reject wrong-type tokens)
-        iat     — issued-at (Unix timestamp)
-        exp     — expiry (iat + 900 seconds)
+        sub       — user UUID (string)
+        org_id    — organisation UUID (string)
+        role      — RBAC role: "admin" | "manager" | "viewer"
+        type      — "access" (used by decode_token to reject wrong-type tokens)
+        iat       — issued-at (Unix timestamp)
+        exp       — expiry (iat + 900 seconds)
+        client_id — (optional) client UUID string; omitted when None
 
     Args:
-        user_id: UUID of the authenticated user.
-        org_id:  UUID of the user's organisation (tenant scope).
-        role:    RBAC role string.
+        user_id:   UUID of the authenticated user.
+        org_id:    UUID of the user's organisation (tenant scope).
+        role:      RBAC role string.
+        client_id: Optional client UUID to scope the token to a single client.
+                   Pass None (default) for all-clients mode (backward compatible).
 
     Returns:
         Signed HS256 JWT string.
@@ -136,6 +185,8 @@ def create_access_token(user_id: UUID, org_id: UUID, role: str) -> str:
         "iat": now,
         "exp": now + _ACCESS_TOKEN_TTL,
     }
+    if client_id is not None:
+        payload["client_id"] = str(client_id)
     return jwt.encode(payload, _jwt_secret(), algorithm=_ALGORITHM)
 
 

@@ -77,11 +77,30 @@ class BrandRepository:
         return brand
 
     @staticmethod
-    async def list_by_org(db: AsyncSession, org_id: UUID) -> list[Brand]:
-        result = await db.execute(
-            select(Brand).where(Brand.org_id == org_id).order_by(Brand.name)
-        )
+    async def list_by_org(
+        db: AsyncSession,
+        org_id: UUID,
+        client_id: Optional[UUID] = None,
+    ) -> list[Brand]:
+        """List brands for an org, optionally scoped to a single client context.
+
+        When client_id is None all brands in the org are returned (all-clients
+        mode, backward compatible).  When client_id is provided only brands
+        assigned to that client are returned (multi-client-support).
+        """
+        q = select(Brand).where(Brand.org_id == org_id)
+        if client_id is not None:
+            q = q.where(Brand.client_id == client_id)
+        result = await db.execute(q.order_by(Brand.name))
         return list(result.scalars().all())
+
+    @staticmethod
+    async def update(db: AsyncSession, brand: Brand, **fields) -> Brand:
+        for key, value in fields.items():
+            setattr(brand, key, value)
+        await db.commit()
+        await db.refresh(brand)
+        return brand
 
     @staticmethod
     async def count_by_org(db: AsyncSession, org_id: UUID) -> int:

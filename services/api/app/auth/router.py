@@ -25,11 +25,13 @@ from app.auth.schemas import (
     LogoutRequest,
     RefreshRequest,
     RefreshResponse,
+    SwitchClientRequest,
+    SwitchClientTokenResponse,
     TokenResponse,
     UserInfo,
 )
-from app.core.security import AuthError, LockoutError
-from app.core.deps import get_current_user, get_db
+from app.core.security import AuthContext, AuthError, LockoutError
+from app.core.deps import get_current_user, get_db, get_user
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,7 @@ async def refresh(
 @router.post("/logout", status_code=status.HTTP_200_OK)
 async def logout(
     body: LogoutRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
@@ -100,8 +102,36 @@ async def logout(
 
 @router.get("/me", response_model=UserInfo, status_code=status.HTTP_200_OK)
 async def me(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_user),
     db: AsyncSession = Depends(get_db),
 ) -> UserInfo:
     """Return profile info for the currently authenticated user."""
     return await auth_service.get_user_info(db, current_user)
+
+
+@router.post(
+    "/switch-client",
+    response_model=SwitchClientTokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def switch_client(
+    body: SwitchClientRequest,
+    ctx: AuthContext = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SwitchClientTokenResponse:
+    """
+    Switch the caller's active client context by issuing a new access token.
+
+    Pass ``client_id: null`` to return to all-clients mode.
+    The current refresh token is unaffected — only the short-lived access token changes.
+
+    Raises HTTP 403 CLIENT_NOT_IN_ORG if the requested client does not exist,
+    is inactive, or belongs to a different organisation.
+    """
+    try:
+        return await auth_service.switch_client_context(db, body, ctx)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc) or "CLIENT_NOT_IN_ORG",
+        ) from exc

@@ -59,6 +59,16 @@ class Brand(Base):
         ForeignKey("organizations.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    # client_id is nullable; NULL means the brand is unassigned (all-clients mode).
+    # Set by PATCH /brands/{id} when an agency assigns a brand to a client.
+    # Added by migration 0013. Part of multi-client-support feature.
+    # NOTE: FK constraint to clients.id is enforced at DB level via migration 0013,
+    # not at ORM level — avoids circular import and SQLite test-setup issues.
+    client_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        default=None,
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     type: Mapped[str] = mapped_column(
         String(50), nullable=False, default="client", server_default="client"

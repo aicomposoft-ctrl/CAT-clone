@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.models import Organization, User
 from app.auth.repository import UserRepository
 from app.core.database import AsyncSessionLocal
-from app.core.security import AuthError, decode_token
+from app.core.security import AuthContext, AuthError, decode_token
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +47,24 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
-) -> User:
+) -> AuthContext:
     """
-    Decode Bearer access token and return the corresponding User.
+    Decode Bearer access token and return an AuthContext.
 
-    Raises HTTPException(401) for any invalid or expired token, or if the
-    user no longer exists in the database.
+    Behaviour (Pseudocode.md § Client Context Injection):
+    1. Decode JWT, validate signature and type.
+    2. Load User from DB.
+    3. Extract optional ``client_id`` claim from JWT payload.
+    4. If client_id is present, validate the client belongs to the user's org
+       and is active — raises 401 INVALID_CLIENT_CONTEXT on failure (treats
+       a forged/stale claim as an authentication failure, not authorisation).
+    5. Return AuthContext(user, org_id, client_id).
+
+    ClientRepository is imported lazily inside this function to prevent
+    a circular-import cycle: clients → deps → clients.
+
+    Raises:
+        HTTPException(401): invalid/expired token, missing user, or bad client claim.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -74,28 +86,70 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
 
-    return user
+    # --- Extract optional client_id claim (multi-client-support feature) -----
+    raw_cid = payload.get("client_id")
+    client_id: UUID | None = None
+    if raw_cid is not None:
+        try:
+            client_id = UUID(raw_cid)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="INVALID_CLIENT_CONTEXT",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Validate client belongs to user's org and is still active.
+        # Lazy import to avoid circular dependency: clients.repository → core.deps.
+        from app.clients.repository import ClientRepository  # noqa: PLC0415
+
+        client = await ClientRepository.get_active_by_id_and_org(
+            db, client_id, user.org_id
+        )
+        if client is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="INVALID_CLIENT_CONTEXT",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    return AuthContext(user=user, org_id=user.org_id, client_id=client_id)
+
+
+def get_user(ctx: AuthContext = Depends(get_current_user)) -> User:
+    """
+    Thin compatibility shim — returns just the User from the AuthContext.
+
+    Use this in routes that only need the User object and do not need
+    client-context awareness (e.g. /auth/logout, /auth/me).
+    New code should prefer ``Depends(get_current_user)`` → ``AuthContext``.
+    """
+    return ctx.user
 
 
 def require_role(*roles: str):
     """
     Dependency factory for role-based access control.
 
+    Returns ``AuthContext`` so callers have access to ``ctx.org_id`` and
+    ``ctx.client_id`` without an extra dependency.
+
     Usage::
 
         @router.delete("/skus/{id}")
-        async def delete_sku(user: User = Depends(require_role("admin", "manager"))):
+        async def delete_sku(ctx: AuthContext = Depends(require_role("admin", "manager"))):
+            user = ctx.user
             ...
 
     Raises HTTPException(403) when the authenticated user's role is not in *roles*.
     """
-    def checker(user: User = Depends(get_current_user)) -> User:
-        if user.role not in roles:
+    def checker(ctx: AuthContext = Depends(get_current_user)) -> AuthContext:
+        if ctx.user.role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="INSUFFICIENT_PERMISSIONS",
             )
-        return user
+        return ctx
 
     return checker
 
