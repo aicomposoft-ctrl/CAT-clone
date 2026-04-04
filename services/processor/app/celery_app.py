@@ -34,6 +34,7 @@ celery_app = Celery(
         "app.tasks.clip_embedding_task",
         "app.tasks.image_scoring_task",
         "app.tasks.text_scoring_task",
+        "app.tasks.sentiment_task",
     ],
 )
 
@@ -45,6 +46,10 @@ celery_app.conf.beat_schedule = {
     "score-text-content-daily": {
         "task": "processor.score_text_content_all",
         "schedule": crontab(hour=6, minute=30),  # 06:30 UTC — after image scoring
+    },
+    "score-pending-reviews-daily": {
+        "task": "processor.score_pending_reviews",
+        "schedule": crontab(hour=3, minute=0),   # 03:00 UTC — after collect_reviews (02:00)
     },
 }
 
