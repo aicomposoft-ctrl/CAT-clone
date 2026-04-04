@@ -35,6 +35,7 @@ Extend the existing `reports` domain (which already contains content-export and 
 - Rows ordered: brand_name → sku_article → platform_name → review_date DESC
 - Returns header-only workbook when no reviews match (no 404)
 - Only reviews belonging to the authenticated user's org are included (multi-tenant isolation)
+- Maximum 10,000 rows per export; if exceeded, a warning row is appended to the workbook
 
 ### US-2: Filter by Platform
 
@@ -44,6 +45,7 @@ Extend the existing `reports` domain (which already contains content-export and 
 
 **Acceptance Criteria:**
 - Optional `platform_id` query param (UUID) — when provided, only reviews from that platform are included
+- If the platform_id is valid but has no reviews in the caller's org, returns header-only workbook (200) — not 404 (the org_id filter handles isolation silently)
 - Invalid UUID → HTTP 422 (FastAPI validation)
 
 ### US-3: Filter by Sentiment
@@ -66,8 +68,8 @@ Extend the existing `reports` domain (which already contains content-export and 
 
 **Acceptance Criteria:**
 - Optional `sku_id` query param (UUID)
-- If the SKU does not belong to the authenticated org → HTTP 404
-- When provided, only reviews for that SKU are included
+- If the SKU does not exist OR belongs to a different org → HTTP 404 with `detail="SKU_NOT_FOUND"` (no distinction between "not found" and "wrong org" — prevents org discovery)
+- When provided and ownership confirmed, only reviews for that SKU are included
 
 ---
 

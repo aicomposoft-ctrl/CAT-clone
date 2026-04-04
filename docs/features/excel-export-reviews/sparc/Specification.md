@@ -255,3 +255,12 @@ When the export is downloaded
 Then the workbook contains exactly 10,000 data rows
 And row 10,003 contains the limit warning message
 ```
+
+### Scenario 16: platform_id from different org returns empty workbook (not 404)
+```gherkin
+Given platform_id belongs to a valid platform with reviews for org_b
+And user is authenticated as manager of org_a
+When GET /api/v1/reports/reviews-export?...&platform_id=<platform_id>
+Then response status is 200
+And the workbook contains only header rows (no data rows for org_b's reviews)
+```
