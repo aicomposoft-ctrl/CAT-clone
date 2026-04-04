@@ -35,14 +35,17 @@ def upgrade() -> None:
         sa.Column("sentiment_score", sa.Numeric(4, 3), nullable=True),
     )
 
-    # Partial index: only unscored rows — used by Celery task WHERE sentiment IS NULL
+    # Partial index: only unscored rows — used by Celery task SELECT (id, review_text) WHERE sentiment IS NULL
+    # INCLUDE (review_text) makes this a covering index — no table lookup needed for the task's SELECT
     op.execute(
-        "CREATE INDEX idx_reviews_sentiment_null ON reviews (id) WHERE sentiment IS NULL"
+        "CREATE INDEX idx_reviews_sentiment_null ON reviews (id) INCLUDE (review_text) WHERE sentiment IS NULL"
     )
 
-    # Composite index: covers summary GROUP BY and history filter queries
+    # Composite index: covers history ORDER BY review_date DESC with optional sentiment filter.
+    # Column order: (sku_platform_id, review_date DESC, sentiment) — date range scan first, then sentiment filter.
+    # Also covers summary GROUP BY via leading sku_platform_id column.
     op.execute(
-        "CREATE INDEX idx_reviews_sp_sentiment ON reviews (sku_platform_id, sentiment, review_date)"
+        "CREATE INDEX idx_reviews_sp_sentiment ON reviews (sku_platform_id, review_date DESC, sentiment)"
     )
 
 

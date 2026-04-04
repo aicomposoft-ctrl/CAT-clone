@@ -56,6 +56,7 @@ async def fetch_summary(
           AND r.review_date BETWEEN :date_from AND :date_to
         GROUP BY sp.platform_id, p.name
         ORDER BY review_count DESC
+        LIMIT 200
     """)
     result = await db.execute(stmt, {
         "org_id": org_id,
