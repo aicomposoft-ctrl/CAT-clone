@@ -166,6 +166,41 @@ async def list_alert_events(
     )
 
 
+@router.patch(
+    "/events/{event_id}/acknowledge",
+    response_model=AlertEventResponse,
+    summary="Acknowledge an alert event",
+)
+async def acknowledge_alert_event(
+    event_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AlertEventResponse:
+    """
+    Mark an alert event as acknowledged (sets is_sent=True on the event row).
+    Returns 404 if the event does not belong to the current user's org.
+    """
+    from sqlalchemy import select, update
+
+    from app.alerts.models import AlertEvent
+
+    # Verify ownership before update
+    result = await db.execute(
+        select(AlertEvent).where(
+            AlertEvent.id == event_id,
+            AlertEvent.org_id == current_user.org_id,
+        )
+    )
+    event = result.scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="EVENT_NOT_FOUND")
+
+    event.is_sent = True
+    await db.commit()
+    await db.refresh(event)
+    return AlertEventResponse.model_validate(event)
+
+
 @router.post(
     "/check",
     response_model=AlertCheckResponse,

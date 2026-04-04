@@ -20,6 +20,8 @@ from fastapi import FastAPI
 from app.core.config import get_settings, validate_required_secrets
 from app.alerts.router import router as alerts_router
 from app.auth.router import router as auth_router
+from app.content.router import router as content_router
+from app.dashboard.router import router as dashboard_router
 from app.prices.router import router as prices_router
 from app.reviews.router import router as reviews_router
 from app.catalog.router import brand_router, platform_router, sku_platform_router, sku_router
@@ -73,5 +75,7 @@ app.include_router(reference_router, prefix="/api/v1/skus", tags=["reference"])
 app.include_router(stock_router, prefix="/api/v1/stock", tags=["stock"])
 app.include_router(reports_router, prefix="/api/v1/reports", tags=["reports"])
 app.include_router(alerts_router, prefix="/api/v1/alerts", tags=["alerts"])
+app.include_router(content_router, prefix="/api/v1/content", tags=["content"])
+app.include_router(dashboard_router, prefix="/api/v1/dashboard", tags=["dashboard"])
 app.include_router(prices_router, prefix="/api/v1/prices", tags=["prices"])
 app.include_router(reviews_router, prefix="/api/v1/reviews", tags=["reviews"])
