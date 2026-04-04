@@ -145,19 +145,45 @@ class ClientRepository:
         return client
 
     @staticmethod
-    async def get_brand_count(db: AsyncSession, client_id: UUID) -> int:
+    async def get_brand_counts_by_org(
+        db: AsyncSession,
+        org_id: UUID,
+    ) -> dict[UUID, int]:
         """
-        Return the number of brands currently assigned to a client.
+        Return brand counts keyed by client_id for all clients in an org.
 
-        Uses COUNT(*) with a WHERE filter — does not load Brand objects into memory.
-        Called by the service layer to populate brand_count in ClientResponse.
+        Single grouped COUNT query — avoids N+1 when populating brand_count
+        for each client in list_clients(). Only counts brands explicitly assigned
+        to a client (client_id IS NOT NULL) within the org.
+
+        SECURITY: filters by org_id so brands from other orgs are never counted.
         """
-        # Import here to avoid circular import — catalog domain depends on clients
-        # for the FK, but clients domain must not import from catalog at module level.
         from app.catalog.models import Brand  # noqa: PLC0415
 
         result = await db.execute(
-            select(func.count()).where(Brand.client_id == client_id)
+            select(Brand.client_id, func.count().label("cnt"))
+            .where(
+                Brand.org_id == org_id,
+                Brand.client_id.isnot(None),
+            )
+            .group_by(Brand.client_id)
         )
-        count = result.scalar_one()
-        return int(count)
+        return {row.client_id: row.cnt for row in result}
+
+    @staticmethod
+    async def get_brand_count(db: AsyncSession, client_id: UUID, org_id: UUID) -> int:
+        """
+        Return the number of brands assigned to a single client within an org.
+
+        SECURITY: must filter by org_id — a client_id UUID is org-scoped but
+        the query must enforce this explicitly to prevent cross-tenant count leaks.
+        """
+        from app.catalog.models import Brand  # noqa: PLC0415
+
+        result = await db.execute(
+            select(func.count()).where(
+                Brand.client_id == client_id,
+                Brand.org_id == org_id,
+            )
+        )
+        return int(result.scalar_one())

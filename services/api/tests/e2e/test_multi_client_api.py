@@ -327,6 +327,68 @@ async def test_brand_client_assignment_via_patch(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_brands_of_deactivated_client_hidden_in_client_context(client, db_session):
+    """Brands assigned to a deactivated client must not appear in scoped brand list.
+
+    BDD scenario from Refinement.md: "Brand assigned to deactivated client →
+    brand hidden in client mode."
+    """
+    org = await _create_org(db_session, "OrgDeactBrand")
+    user = await _create_user(db_session, org.id, email="deactbrand@test.com")
+    cli = await _create_client(db_session, org.id, slug="soon-inactive")
+    brand = Brand(org_id=org.id, name="BrandOfDeactivated", client_id=cli.id)
+    db_session.add(brand)
+    # Deactivate the client
+    cli.is_active = False
+    await db_session.flush()
+
+    # Token scoped to the (now deactivated) client → get_current_user raises 401
+    headers_inactive = _auth_headers(user, client_id=cli.id)
+    resp = await client.get("/api/v1/brands", headers=headers_inactive)
+    # JWT with deactivated client_id → 401 INVALID_CLIENT_CONTEXT
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "INVALID_CLIENT_CONTEXT"
+
+
+@pytest.mark.asyncio
+async def test_brand_visibility_after_switch_client_round_trip(client, db_session):
+    """Brand list reflects scoped context after the full switch-client round-trip.
+
+    BDD scenario from Refinement.md: "Brand visibility consistency after client switch."
+    Tests POST /auth/switch-client → new token → GET /brands → verify scope.
+    """
+    org = await _create_org(db_session, "OrgRoundTrip")
+    user = await _create_user(db_session, org.id, email="roundtrip@test.com")
+    cli_a = await _create_client(db_session, org.id, slug="round-trip-client-a")
+    cli_b = await _create_client(db_session, org.id, slug="round-trip-client-b")
+
+    brand_a = Brand(org_id=org.id, name="RoundTripBrandA", client_id=cli_a.id)
+    brand_b = Brand(org_id=org.id, name="RoundTripBrandB", client_id=cli_b.id)
+    db_session.add_all([brand_a, brand_b])
+    await db_session.flush()
+
+    # Start with no client context
+    headers = _auth_headers(user)
+
+    # Switch to client_a via the actual endpoint
+    switch_resp = await client.post(
+        "/api/v1/auth/switch-client",
+        json={"client_id": str(cli_a.id)},
+        headers=headers,
+    )
+    assert switch_resp.status_code == 200
+    new_token = switch_resp.json()["access_token"]
+    scoped_headers = {"Authorization": f"Bearer {new_token}"}
+
+    # Brands endpoint must return only client_a's brands
+    brands_resp = await client.get("/api/v1/brands", headers=scoped_headers)
+    assert brands_resp.status_code == 200
+    names = [b["name"] for b in brands_resp.json()["items"]]
+    assert "RoundTripBrandA" in names
+    assert "RoundTripBrandB" not in names
+
+
+@pytest.mark.asyncio
 async def test_forged_client_id_in_jwt_returns_401(client, db_session):
     """JWT with non-existent client_id → 401 INVALID_CLIENT_CONTEXT."""
     import uuid
@@ -338,5 +400,30 @@ async def test_forged_client_id_in_jwt_returns_401(client, db_session):
     headers = _auth_headers(user, client_id=fake_client_id)
 
     resp = await client.get("/api/v1/clients/", headers=headers)
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "INVALID_CLIENT_CONTEXT"
+
+
+@pytest.mark.asyncio
+async def test_stale_client_id_deactivated_after_token_issue_returns_401(client, db_session):
+    """Client deactivated after JWT was issued → subsequent requests return 401.
+
+    This is the primary motivation for per-request DB re-validation in
+    get_current_user: tokens are 15-minute lived, so a deactivated client must
+    be caught on the next request, not just at login.
+    """
+    org = await _create_org(db_session, "OrgStaleJWT")
+    user = await _create_user(db_session, org.id, email="stale@test.com")
+    cli = await _create_client(db_session, org.id, slug="stale-client")
+
+    # Issue token while client is still active
+    headers_with_client = _auth_headers(user, client_id=cli.id)
+
+    # Deactivate the client after token was issued
+    cli.is_active = False
+    await db_session.flush()
+
+    # The token still has client_id in it, but the client is now inactive
+    resp = await client.get("/api/v1/clients/", headers=headers_with_client)
     assert resp.status_code == 401
     assert resp.json()["detail"] == "INVALID_CLIENT_CONTEXT"

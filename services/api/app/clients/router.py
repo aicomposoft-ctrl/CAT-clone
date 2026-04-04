@@ -65,11 +65,6 @@ async def create_client(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         )
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        )
 
 
 @router.get(
@@ -88,16 +83,10 @@ async def list_clients(
     Returns active clients only (include_inactive=False).
     Any authenticated user may list clients.
     """
-    try:
-        return await service.list_clients(
-            db=db,
-            org_id=current_user.org_id,
-        )
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        )
+    return await service.list_clients(
+        db=db,
+        org_id=current_user.org_id,
+    )
 
 
 @router.get(
@@ -126,11 +115,6 @@ async def get_client(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="CLIENT_NOT_FOUND",
-        )
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
         )
 
 
@@ -164,11 +148,6 @@ async def update_client(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="CLIENT_NOT_FOUND",
         )
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
-        )
 
 
 @router.delete(
@@ -200,9 +179,4 @@ async def deactivate_client(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="CLIENT_NOT_FOUND",
-        )
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=str(exc),
         )

@@ -79,14 +79,22 @@ async def create_client(
     if existing is not None:
         raise ValueError("SLUG_CONFLICT")
 
+    from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
     client = Client(
         org_id=org_id,
         name=request.name,
         slug=request.slug,
         contact_email=request.contact_email,
-        logo_url=str(request.logo_url) if request.logo_url else None,
+        logo_url=request.logo_url,
     )
-    saved = await ClientRepository.create(db, client)
+    try:
+        saved = await ClientRepository.create(db, client)
+    except IntegrityError:
+        # Concurrent insert won the race — the partial unique index caught it.
+        # Re-read to confirm and surface the same error as the pre-check path.
+        await db.rollback()
+        raise ValueError("SLUG_CONFLICT")
 
     logger.info(
         "clients.service.created client_id=%s org_id=%s slug=%s",
@@ -116,10 +124,9 @@ async def list_clients(
     """
     clients = await ClientRepository.list_by_org(db, org_id, include_inactive=include_inactive)
 
-    items: list[ClientResponse] = []
-    for client in clients:
-        brand_count = await ClientRepository.get_brand_count(db, client.id)
-        items.append(_build_response(client, brand_count))
+    # Single grouped COUNT query — avoids N+1 (one query per client).
+    counts = await ClientRepository.get_brand_counts_by_org(db, org_id)
+    items = [_build_response(c, counts.get(c.id, 0)) for c in clients]
 
     return ClientListResponse(items=items, total=len(items))
 
@@ -150,7 +157,7 @@ async def get_client(
     if client is None:
         raise KeyError("CLIENT_NOT_FOUND")
 
-    brand_count = await ClientRepository.get_brand_count(db, client.id)
+    brand_count = await ClientRepository.get_brand_count(db, client.id, org_id)
     return _build_response(client, brand_count)
 
 
@@ -198,7 +205,7 @@ async def update_client(
         org_id,
     )
 
-    brand_count = await ClientRepository.get_brand_count(db, updated.id)
+    brand_count = await ClientRepository.get_brand_count(db, updated.id, org_id)
     return _build_response(updated, brand_count)
 
 
