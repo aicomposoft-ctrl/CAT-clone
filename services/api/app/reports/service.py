@@ -24,8 +24,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.reports.repository import (
     ContentScoreRow,
+    ReviewRow,
     StockRow,
     get_content_scores_for_export,
+    get_reviews_for_export,
     get_stock_data_for_export,
 )
 
@@ -259,6 +261,155 @@ async def build_content_export(
     )
 
     wb = _build_workbook(rows, date_from=date_from, date_to=date_to)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# Reviews export
+# ---------------------------------------------------------------------------
+
+_REVIEWS_COLUMNS: list[tuple[str, int]] = [
+    ("Бренд", 20),
+    ("Артикул", 15),
+    ("Название SKU", 40),
+    ("Платформа", 20),
+    ("Дата отзыва", 14),
+    ("Рейтинг", 10),
+    ("Тональность", 14),
+    ("Оценка тональности", 20),
+    ("Текст отзыва", 60),
+]
+
+_SENTIMENT_FILLS = {
+    "positive": PatternFill("solid", fgColor="C6EFCE"),
+    "neutral": PatternFill("solid", fgColor="FFEB9C"),
+    "negative": PatternFill("solid", fgColor="FFC7CE"),
+}
+
+_WARN_FILL = PatternFill("solid", fgColor="FFEB9C")
+_MAX_REVIEW_TEXT_LEN = 500
+
+
+def _fmt_rating(value: Optional[int]) -> str:
+    return "—" if value is None else str(value)
+
+
+def _fmt_score_3dp(value: Optional[Decimal]) -> str:
+    return "—" if value is None else f"{value:.3f}"
+
+
+def _fmt_review_text(value: Optional[str]) -> str:
+    if not value:
+        return "—"
+    return value if len(value) <= _MAX_REVIEW_TEXT_LEN else value[:_MAX_REVIEW_TEXT_LEN] + "…"
+
+
+def _build_reviews_workbook(
+    rows: list[ReviewRow],
+    date_from: date,
+    date_to: date,
+    truncated: bool,
+) -> Workbook:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Reviews"
+
+    num_cols = len(_REVIEWS_COLUMNS)
+    col_range = get_column_letter(num_cols)
+
+    # Row 1: merged period header
+    ws.merge_cells(f"A1:{col_range}1")
+    period_cell = ws["A1"]
+    period_cell.value = f"Отчёт по отзывам: {date_from} — {date_to}"
+    period_cell.font = Font(bold=True, name="Calibri", size=12)
+    period_cell.alignment = Alignment(horizontal="center")
+
+    # Row 2: column headers
+    for col_idx, (label, width) in enumerate(_REVIEWS_COLUMNS, start=1):
+        cell = ws.cell(row=2, column=col_idx, value=label)
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    ws.row_dimensions[2].height = 30
+    ws.freeze_panes = "A3"
+
+    # Data rows starting at row 3
+    for row_idx, row in enumerate(rows, start=3):
+        values = [
+            row.brand_name,
+            row.sku_article or "—",
+            row.sku_name,
+            row.platform_name,
+            row.review_date.isoformat(),
+            _fmt_rating(row.rating),
+            row.sentiment or "—",
+            _fmt_score_3dp(row.sentiment_score),
+            _fmt_review_text(row.review_text),
+        ]
+
+        for col_idx, value in enumerate(values, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = _BODY_FONT
+            cell.alignment = Alignment(
+                vertical="center",
+                wrap_text=(col_idx == 9),
+            )
+
+        # Sentiment color on columns 7–8 only
+        fill = _SENTIMENT_FILLS.get(row.sentiment) if row.sentiment else None
+        if fill is not None:
+            ws.cell(row=row_idx, column=7).fill = fill
+            ws.cell(row=row_idx, column=8).fill = fill
+
+    # Warning row when result was truncated
+    if truncated:
+        warn_row = len(rows) + 3
+        ws.merge_cells(f"A{warn_row}:{col_range}{warn_row}")
+        warn_cell = ws[f"A{warn_row}"]
+        warn_cell.value = (
+            "⚠ Превышен лимит 10 000 строк. "
+            "Используйте фильтры для сужения выборки."
+        )
+        warn_cell.fill = _WARN_FILL
+        warn_cell.font = Font(bold=True, name="Calibri", size=11)
+        warn_cell.alignment = Alignment(horizontal="center")
+
+    ws.auto_filter.ref = f"A2:{col_range}2"
+    return wb
+
+
+async def build_reviews_export(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    platform_id: Optional[uuid.UUID] = None,
+    sentiment: Optional[str] = None,
+    sku_id: Optional[uuid.UUID] = None,
+) -> bytes:
+    """
+    Query reviews and return Excel bytes.
+
+    Returns a header-only workbook when no reviews match the filters.
+    Never raises on empty result — that is a valid state.
+    """
+    rows, truncated = await get_reviews_for_export(
+        db=db,
+        org_id=org_id,
+        date_from=date_from,
+        date_to=date_to,
+        platform_id=platform_id,
+        sentiment=sentiment,
+        sku_id=sku_id,
+    )
+
+    wb = _build_reviews_workbook(rows, date_from=date_from, date_to=date_to, truncated=truncated)
 
     buf = io.BytesIO()
     wb.save(buf)

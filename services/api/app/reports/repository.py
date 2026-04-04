@@ -2,8 +2,8 @@
 Database queries for the reports domain.
 
 All queries are read-only and MUST be tenant-scoped via skus.org_id.
-The content_scores table has no org_id column — isolation is enforced
-by joining through sku_platforms → skus.
+The content_scores and reviews tables have no org_id column — isolation is
+enforced by joining through sku_platforms → skus.
 
 Query patterns:
   content_scores
@@ -15,6 +15,12 @@ Query patterns:
   stock export additionally:
     LEFT JOIN distribution_plans ON sku_id + platform_id + week_number + year
     (week extracted from scored_at via func.extract — PostgreSQL/SQLite compatible)
+
+  reviews export:
+    JOIN sku_platforms ON sku_platform_id
+    JOIN skus         ON sku_id  (← org_id filter applied here)
+    JOIN brands       ON brand_id
+    JOIN platforms    ON platform_id
 """
 
 import uuid
@@ -23,7 +29,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import func, outerjoin, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog.models import Brand, Platform, SKU, SKUPlatform
@@ -208,3 +214,105 @@ async def get_stock_data_for_export(
         )
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Reviews export
+# ---------------------------------------------------------------------------
+
+_ROW_LIMIT = 10_000
+
+
+@dataclass(slots=True)
+class ReviewRow:
+    """Flat projection for the reviews Excel export."""
+
+    brand_name: str
+    sku_article: Optional[str]
+    sku_name: str
+    platform_name: str
+    review_date: date
+    rating: Optional[int]
+    sentiment: Optional[str]
+    sentiment_score: Optional[Decimal]
+    review_text: Optional[str]
+
+
+async def get_reviews_for_export(
+    db: AsyncSession,
+    org_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    platform_id: Optional[uuid.UUID] = None,
+    sentiment: Optional[str] = None,
+    sku_id: Optional[uuid.UUID] = None,
+) -> tuple[list[ReviewRow], bool]:
+    """
+    Return reviews for *org_id* within [date_from, date_to].
+
+    Returns (rows, truncated).
+      rows      — up to _ROW_LIMIT rows (10,000)
+      truncated — True when result exceeds _ROW_LIMIT; caller appends warning row
+
+    Tenant isolation: SKU.org_id == org_id is the mandatory filter, applied via JOIN.
+    """
+    from app.reviews.models import Review  # local import to avoid circular dependency
+
+    stmt = (
+        select(
+            Brand.name.label("brand_name"),
+            SKU.article.label("sku_article"),
+            SKU.name.label("sku_name"),
+            Platform.name.label("platform_name"),
+            Review.review_date,
+            Review.rating,
+            Review.sentiment,
+            Review.sentiment_score,
+            Review.review_text,
+        )
+        .join(SKUPlatform, Review.sku_platform_id == SKUPlatform.id)
+        .join(SKU, SKUPlatform.sku_id == SKU.id)
+        .join(Brand, SKU.brand_id == Brand.id)
+        .join(Platform, SKUPlatform.platform_id == Platform.id)
+        .where(SKU.org_id == org_id)
+        .where(Review.review_date >= date_from)
+        .where(Review.review_date <= date_to)
+        .order_by(
+            Brand.name,
+            SKU.article.nulls_last(),
+            Platform.name,
+            Review.review_date.desc(),
+        )
+        .limit(_ROW_LIMIT + 1)  # fetch one extra to detect truncation
+    )
+
+    if platform_id is not None:
+        stmt = stmt.where(SKUPlatform.platform_id == platform_id)
+    if sentiment is not None:
+        stmt = stmt.where(Review.sentiment == sentiment)
+    if sku_id is not None:
+        stmt = stmt.where(SKU.id == sku_id)
+
+    result = await db.execute(stmt)
+    raw = result.all()
+
+    truncated = len(raw) > _ROW_LIMIT
+    rows = raw[:_ROW_LIMIT]
+
+    return (
+        [
+            ReviewRow(
+                brand_name=r.brand_name,
+                sku_article=r.sku_article,
+                sku_name=r.sku_name,
+                platform_name=r.platform_name,
+                review_date=r.review_date,
+                rating=r.rating,
+                sentiment=r.sentiment,
+                sentiment_score=Decimal(str(r.sentiment_score)) if r.sentiment_score is not None else None,
+                review_text=r.review_text,
+            )
+            for r in rows
+        ],
+        truncated,
+    )

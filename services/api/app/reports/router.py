@@ -9,7 +9,11 @@ Endpoints:
       Returns Excel (.xlsx) with stock fact data (in_stock, warehouse_qty)
       joined with the distribution plan (plan_tt_count) for the same ISO week.
 
-  Both endpoints accept:
+  GET /api/v1/reports/reviews-export
+      Returns Excel (.xlsx) with reviews (text, rating, sentiment) for the
+      caller's org. Optional filters: platform_id, sentiment, sku_id.
+
+  All endpoints accept:
     date_from   — required, ISO date (YYYY-MM-DD)
     date_to     — required, ISO date (YYYY-MM-DD), must be >= date_from
     platform_id — optional UUID, narrows to a single platform
@@ -20,7 +24,7 @@ Endpoints:
 
 import logging
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -28,6 +32,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
+from app.catalog.repository import SKURepository
 from app.core.deps import get_current_user, get_db
 from app.reports import service
 
@@ -152,6 +157,74 @@ async def export_stock_data(
         )
 
     filename = f"stock_{date_from}_{date_to}.xlsx"
+    return Response(
+        content=xlsx_bytes,
+        media_type=_EXCEL_CONTENT_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(xlsx_bytes)),
+        },
+    )
+
+
+@router.get(
+    "/reviews-export",
+    summary="Export reviews with sentiment to Excel",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {_EXCEL_CONTENT_TYPE: {}},
+            "description": "Excel workbook with reviews and sentiment data",
+        },
+        400: {"description": "Invalid date range"},
+        404: {"description": "SKU not found or not owned by caller"},
+    },
+)
+async def export_reviews(
+    date_from: date = Query(..., description="Start date inclusive (YYYY-MM-DD)"),
+    date_to: date = Query(..., description="End date inclusive (YYYY-MM-DD)"),
+    platform_id: Optional[UUID] = Query(None, description="Filter by platform UUID"),
+    sentiment: Optional[Literal["positive", "neutral", "negative"]] = Query(
+        None, description="Filter by sentiment label"
+    ),
+    sku_id: Optional[UUID] = Query(
+        None, description="Filter by SKU UUID (must belong to caller's org)"
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """
+    Download a .xlsx report of reviews (with sentiment) for the authenticated user's org.
+
+    Optional filters: platform_id, sentiment, sku_id.
+    When sku_id is provided, verifies the SKU belongs to the caller's org (404 on mismatch).
+    Returns an empty workbook (header row only) when no reviews match the filters.
+    """
+    _validate_date_range(date_from, date_to)
+
+    if sku_id is not None:
+        sku = await SKURepository.get_by_id_and_org(db, sku_id=sku_id, org_id=current_user.org_id)
+        if sku is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SKU_NOT_FOUND")
+
+    try:
+        xlsx_bytes = await service.build_reviews_export(
+            db=db,
+            org_id=current_user.org_id,
+            date_from=date_from,
+            date_to=date_to,
+            platform_id=platform_id,
+            sentiment=sentiment,
+            sku_id=sku_id,
+        )
+    except Exception:
+        logger.exception("Unexpected error generating reviews export")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="INTERNAL_ERROR",
+        )
+
+    filename = f"reviews_{date_from}_{date_to}.xlsx"
     return Response(
         content=xlsx_bytes,
         media_type=_EXCEL_CONTENT_TYPE,
