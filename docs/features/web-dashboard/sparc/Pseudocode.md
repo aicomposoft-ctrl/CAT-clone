@@ -98,7 +98,7 @@ interface AlertEvent {
   value_before: number
   value_after: number
   triggered_at: string
-  is_acknowledged: boolean
+  is_acknowledged: boolean  // maps to backend `is_sent`; rename field in migration
 }
 
 // store/authStore.ts
@@ -316,10 +316,10 @@ Response (200):
   }
 ```
 
-### POST /api/v1/reports/content-export
+### GET /api/v1/reports/content-export
 
 ```
-Body: { date?: string, platform_ids?: UUID[] }
+Query: date?: string, platform_ids?: UUID[] (comma-separated)
 Response (200): application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 Content-Disposition: attachment; filename="content_scores_YYYYMMDD.xlsx"
 ```
@@ -342,7 +342,78 @@ stateDiagram-v2
 
 ---
 
-## 5. Error Handling Strategy
+## 5. ProtectedRoute Algorithm
+
+```typescript
+// components/ProtectedRoute.tsx
+type Role = 'admin' | 'manager' | 'viewer'
+
+interface ProtectedRouteProps {
+  allowedRoles?: Role[]  // if undefined, any authenticated user allowed
+}
+
+FUNCTION ProtectedRoute({ allowedRoles }):
+  user = authStore.getState().user
+
+  IF user IS null:
+    RETURN <Navigate to="/login" replace />
+
+  IF allowedRoles IS defined AND user.role NOT IN allowedRoles:
+    // Viewer trying to access /settings/skus → redirect to dashboard
+    RETURN <Navigate to="/dashboard" replace />
+
+  RETURN <Outlet />
+
+// Route configuration:
+// <Route element={<ProtectedRoute />}>          ← any authenticated user
+//   <Route path="/dashboard" element={<DashboardPage />} />
+//   <Route path="/content" element={<ContentPage />} />
+//   ...
+// </Route>
+// <Route element={<ProtectedRoute allowedRoles={['admin', 'manager']} />}>
+//   <Route path="/settings/skus" element={<SKUSettingsPage />} />
+// </Route>
+```
+
+---
+
+## 6. Safe Text Rendering (XSS Prevention)
+
+```typescript
+// All scraped text fields MUST be rendered as plain text via JSX interpolation.
+// NEVER use dangerouslySetInnerHTML for review_text, collected_description,
+// collected_composition, or any diff output.
+
+// CORRECT — JSX auto-escapes:
+<p>{review.review_text}</p>
+
+// WRONG — XSS risk:
+<p dangerouslySetInnerHTML={{ __html: review.review_text }} />
+
+// For diff highlighting in ContentDrillDrawer:
+// Use diff-match-patch library which returns array of [op, text] tuples.
+// Render each tuple as a React span — no HTML strings.
+import { diff_match_patch } from 'diff-match-patch'
+
+FUNCTION renderDiff(reference: string, collected: string): ReactNode[]:
+  dmp = new diff_match_patch()
+  diffs = dmp.diff_main(reference, collected)
+  dmp.diff_cleanupSemantic(diffs)
+
+  RETURN diffs.map(([op, text], i) →
+    IF op === 1:  // insertion
+      <span key={i} style={{ background: '#f6ffed', color: '#52c41a' }}>{text}</span>
+    ELSE IF op === -1:  // deletion
+      <span key={i} style={{ textDecoration: 'line-through', color: '#ff4d4f' }}>{text}</span>
+    ELSE:  // equal
+      <span key={i}>{text}</span>
+  )
+// text is always plain string — never set as HTML
+```
+
+---
+
+## 7. Error Handling Strategy
 
 | Error | UI Behavior |
 |-------|-------------|

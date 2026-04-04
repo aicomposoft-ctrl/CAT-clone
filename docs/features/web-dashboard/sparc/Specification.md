@@ -233,16 +233,111 @@ Scenario: Admin bulk uploads SKUs via CSV
 
 ---
 
+### Cross-Cutting: Multi-Tenant Isolation
+
+```gherkin
+Feature: Multi-Tenant Isolation
+
+Scenario: User from Org A cannot see Org B data
+  Given user_a is authenticated for organization "BrandCo" (org_a)
+  And user_b has created SKUs and content scores in organization "RetailInc" (org_b)
+  When user_a navigates to /content
+  Then user_a sees only scores belonging to org_a
+  And no data from org_b appears in any table, chart, or KPI card
+
+Scenario: Cross-tenant alert isolation
+  Given alert events exist for org_b
+  When user_a navigates to /alerts
+  Then user_a sees no alerts from org_b
+```
+
+---
+
+### Cross-Cutting: RBAC Enforcement
+
+```gherkin
+Feature: Role-Based Access Control
+
+Scenario: Viewer cannot access SKU settings
+  Given I am authenticated as viewer
+  When I navigate to /settings/skus directly
+  Then I am redirected to /dashboard
+  And no SKU create/edit/delete buttons are visible
+
+Scenario: Viewer cannot acknowledge alerts
+  Given I am authenticated as viewer
+  When I view the Alerts page
+  Then the "Acknowledge" button is not rendered
+
+Scenario: Viewer cannot trigger Excel export
+  Given I am authenticated as viewer
+  When I view any domain page
+  Then the "Export" button is not rendered
+
+Scenario: Manager can create SKU but not manage users
+  Given I am authenticated as manager
+  When I navigate to /settings/skus
+  Then I can create, edit, and deactivate SKUs
+  And there is no "Manage Users" option visible
+```
+
+---
+
+### Cross-Cutting: UI States (applies to all pages)
+
+```gherkin
+Feature: Common UI States
+
+Scenario: Table loading state
+  Given I navigate to any domain page
+  When data is being fetched from API
+  Then skeleton rows are shown in the table
+  And filters are disabled during loading
+
+Scenario: Empty state after filtering
+  Given I am on the Content page
+  When I apply a filter that matches no rows
+  Then "No SKUs match the selected filters" message is shown
+  And a "Clear filters" button is visible
+
+Scenario: API error state
+  Given the API returns a 500 error
+  When I navigate to any page
+  Then a toast "Server error, try again" is shown
+  And the last successfully loaded data remains visible (not replaced with blank)
+
+Scenario: Empty org (new user)
+  Given my organization has no SKUs configured
+  When I navigate to /dashboard
+  Then each KPI card shows 0 or "-"
+  And a "Get started: Add your first SKU" banner is shown
+  And Red Zone widget shows "No data yet"
+```
+
+---
+
 ### US-10: Authentication
 
 ```gherkin
 Feature: Authentication
 
-Scenario: User logs in
+Scenario: User logs in successfully
   Given I am on /login
   When I enter valid email + password
   Then I receive JWT access token (15 min) + refresh token (7 days)
   And I am redirected to /dashboard
+
+Scenario: User enters wrong password
+  Given I am on /login
+  When I enter a valid email but incorrect password
+  Then a 401 response is returned
+  And an inline error "Invalid email or password" is shown under the form
+  And I remain on /login
+
+Scenario: Login button shows loading state
+  Given I am on /login
+  When I click the login button
+  Then the button shows a spinner and is disabled until the API responds
 
 Scenario: Token auto-refresh
   Given my access token expires
@@ -250,15 +345,42 @@ Scenario: Token auto-refresh
   Then Axios interceptor uses refresh token to get new access token
   And original request is retried transparently
 
+Scenario: Refresh token expired — session expired
+  Given my refresh token has expired (7 days elapsed)
+  When any API call triggers a 401 and the refresh attempt fails
+  Then I am redirected to /login
+  And a banner "Session expired, please log in again" is shown
+
 Scenario: User logs out
   When I click "Logout"
-  Then tokens are cleared from memory/localStorage
+  Then access token is cleared from in-memory Zustand store
+  And refresh token is cleared from sessionStorage
   And I am redirected to /login
 ```
 
 ---
 
-## 2. Non-Functional Requirements
+## 2. Price Anomaly Threshold Definition
+
+Per US-05, a price is flagged as an anomaly when:
+- Price change > **20%** compared to price 24h ago (MVP hardcoded threshold)
+- Or `discount_pct` appears for the first time (new promo)
+
+This is displayed with a red highlight in the price table. Future: configurable per org in Settings.
+
+---
+
+## 3. Token Storage Decision
+
+**Chosen approach:** access token in Zustand (in-memory), refresh token in `sessionStorage`.
+
+**Rationale:** httpOnly refresh cookies require backend CORS + cookie config changes that are out of scope for this sprint. `sessionStorage` is scoped per-tab and cleared on tab close, reducing the attack surface vs `localStorage`. XSS mitigation is handled via strict CSP (`default-src 'self'`), no `dangerouslySetInnerHTML`, and scraped text treated as plain strings.
+
+**Accepted risk:** If an XSS vector exists, sessionStorage can be read. Mitigation: CSP headers + input sanitization at collector level.
+
+---
+
+## 4. Non-Functional Requirements
 
 ### Performance
 - Dashboard initial render: LCP < 2s
