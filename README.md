@@ -81,7 +81,7 @@ SPARC column: P1=docs · P2=validation · P3=impl · P4=review. ✅ all phases �
 | 13 | Excel Export (Stock) | P0 | 4 | 8 | ✅ Done | ✅ P1·P2·P3·P4 |
 | 14 | Email alerts | P0 | 5 | 8 | ✅ Done | ✅ P1·P2·P3·P4 |
 | 15 | Price monitoring | P1 | 6 | 13 | ✅ Done | ✅ P1·P2·P3·P4 |
-| 16 | Reviews NLP | P1 | 7 | 13 | 🔲 | 🔲 |
+| 16 | Reviews NLP | P1 | 7 | 13 | ✅ Done | ✅ P1·P2·P3·P4 |
 | 17 | Excel Export (Reviews) | P1 | 7 | 5 | 🔲 | 🔲 |
 | 18 | Web Dashboard | P1 | 8 | 21 | 🔲 | 🔲 |
 | 19 | API public endpoints | P1 | 9 | 13 | 🔲 | 🔲 |
@@ -97,7 +97,7 @@ SPARC column: P1=docs · P2=validation · P3=impl · P4=review. ✅ all phases �
 
 ✅ **All SPARC lifecycle debt resolved** as of 2026-04-03.
 
-To implement next: Reviews NLP (Sprint 7)
+To implement next: Excel Export (Reviews) (Sprint 7)
 
 ## License
 
