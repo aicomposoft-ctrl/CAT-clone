@@ -17,7 +17,6 @@ import logging
 import secrets
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_keys.models import APIKey
@@ -169,10 +168,7 @@ async def revoke_api_key(
     )
 
     if api_key is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="API_KEY_NOT_FOUND",
-        )
+        raise KeyError("API_KEY_NOT_FOUND")
 
     api_key.revoked = True
     await db.commit()

@@ -155,11 +155,12 @@ class PublicReviewsSummary(BaseModel):
 
 
 class PublicReviewsSummaryResponse(BaseModel):
-    """Response for GET /public/reviews/summary."""
+    """Paginated response for GET /public/reviews/summary."""
 
     model_config = ConfigDict(from_attributes=True)
 
     items: list[PublicReviewsSummary]
+    total: int
 
 
 # ---------------------------------------------------------------------------

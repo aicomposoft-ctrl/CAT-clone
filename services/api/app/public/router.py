@@ -345,6 +345,8 @@ async def get_stock(
 async def get_prices(
     sku_id: Optional[UUID] = Query(None, description="Filter by SKU UUID"),
     platform_id: Optional[UUID] = Query(None, description="Filter by platform UUID"),
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(50, ge=1, le=500, description="Items per page (max 500)"),
     db: AsyncSession = Depends(get_db),
     org: Organization = Depends(get_org_by_api_key),
 ) -> PublicPriceResponse:
@@ -386,7 +388,16 @@ async def get_prices(
     if platform_id:
         params["platform_id"] = str(platform_id)
 
-    result = await db.execute(text(stmt_sql), params)
+    offset = (page - 1) * page_size
+    count_result = await db.execute(
+        text(f"SELECT COUNT(*) FROM ({stmt_sql}) counted"), params
+    )
+    total = count_result.scalar_one()
+
+    result = await db.execute(
+        text(f"{stmt_sql} ORDER BY sku_name ASC, platform_name ASC LIMIT :limit OFFSET :offset"),
+        {**params, "limit": page_size, "offset": offset},
+    )
     rows = result.fetchall()
 
     items = [
@@ -403,7 +414,7 @@ async def get_prices(
         for row in rows
     ]
 
-    return PublicPriceResponse(items=items, total=len(items))
+    return PublicPriceResponse(items=items, total=total)
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +430,8 @@ async def get_prices(
 async def get_reviews_summary(
     brand_id: Optional[UUID] = Query(None, description="Filter by brand UUID"),
     platform_id: Optional[UUID] = Query(None, description="Filter by platform UUID"),
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(50, ge=1, le=200, description="Items per page (max 200)"),
     db: AsyncSession = Depends(get_db),
     org: Organization = Depends(get_org_by_api_key),
 ) -> PublicReviewsSummaryResponse:
@@ -471,7 +484,11 @@ async def get_reviews_summary(
     if platform_id:
         params["platform_id"] = str(platform_id)
 
-    result = await db.execute(text(stmt_sql), params)
+    offset = (page - 1) * page_size
+    result = await db.execute(
+        text(f"{stmt_sql} LIMIT :limit OFFSET :offset"),
+        {**params, "limit": page_size, "offset": offset},
+    )
     rows = result.fetchall()
 
     items = [
@@ -487,7 +504,7 @@ async def get_reviews_summary(
         for row in rows
     ]
 
-    return PublicReviewsSummaryResponse(items=items)
+    return PublicReviewsSummaryResponse(items=items, total=len(items))
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +520,8 @@ async def get_reviews_summary(
 async def get_alerts(
     days: int = Query(30, ge=1, le=365, description="Number of days to look back (default 30)"),
     severity: Optional[str] = Query(None, description="Filter by severity: 'critical' or 'warning'"),
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(50, ge=1, le=500, description="Items per page (max 500)"),
     db: AsyncSession = Depends(get_db),
     org: Organization = Depends(get_org_by_api_key),
 ) -> PublicAlertResponse:
@@ -548,12 +567,16 @@ async def get_alerts(
         ORDER BY ae.triggered_at DESC
     """
 
+    offset = (page - 1) * page_size
     count_result = await db.execute(
         text(f"SELECT COUNT(*) FROM ({stmt_sql}) counted"), params
     )
     total = count_result.scalar_one()
 
-    result = await db.execute(text(stmt_sql), params)
+    result = await db.execute(
+        text(f"{stmt_sql} LIMIT :limit OFFSET :offset"),
+        {**params, "limit": page_size, "offset": offset},
+    )
     rows = result.fetchall()
 
     items = [

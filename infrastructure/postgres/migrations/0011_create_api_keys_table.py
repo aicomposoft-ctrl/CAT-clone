@@ -93,12 +93,12 @@ def upgrade() -> None:
     )
 
     op.create_index("idx_api_keys_org_id", "api_keys", ["org_id"])
-    op.create_index("idx_api_keys_key_hash", "api_keys", ["key_hash"])
+    # Note: key_hash already has a unique index via UniqueConstraint above.
+    # A separate non-unique index would be redundant — omitted intentionally.
     op.create_index("idx_api_keys_key_prefix", "api_keys", ["key_prefix"])
 
 
 def downgrade() -> None:
     op.drop_index("idx_api_keys_key_prefix", table_name="api_keys")
-    op.drop_index("idx_api_keys_key_hash", table_name="api_keys")
     op.drop_index("idx_api_keys_org_id", table_name="api_keys")
     op.drop_table("api_keys")

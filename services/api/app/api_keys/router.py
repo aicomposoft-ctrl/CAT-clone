@@ -13,7 +13,7 @@ The raw key is returned only on POST (creation). GET never returns the full key.
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_keys import service
@@ -82,4 +82,7 @@ async def revoke_api_key(
     Returns 404 for both "not found" and "wrong org" cases to prevent key enumeration.
     Requires admin or manager role.
     """
-    await service.revoke_api_key(db=db, key_id=key_id, current_user=current_user)
+    try:
+        await service.revoke_api_key(db=db, key_id=key_id, current_user=current_user)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API_KEY_NOT_FOUND")
