@@ -495,3 +495,30 @@ class TestBuildReviewsWorkbook:
         loaded = _load_wb(wb)
         ws = loaded["Reviews"]
         assert ws.cell(row=3, column=8).value == "0.920"
+
+    def test_sentiment_color_applied_to_column_8_as_well(self):
+        """Sentiment fill must be applied to col 8 (score) in addition to col 7."""
+        rows = [_make_review_rows(1, "negative")[0]]
+        wb = _build_reviews_workbook(rows, _today, _today, False)
+        loaded = _load_wb(wb)
+        ws = loaded["Reviews"]
+        fill8 = ws.cell(row=3, column=8).fill
+        assert fill8.fgColor.rgb.upper().endswith("FFC7CE")
+
+    def test_sentiment_score_null_formatted_as_dash(self):
+        """sentiment_score=None → column 8 shows '—'."""
+        row = ReviewRow(
+            brand_name="B",
+            sku_article=None,
+            sku_name="S",
+            platform_name="P",
+            review_date=_today,
+            rating=4,
+            sentiment=None,
+            sentiment_score=None,
+            review_text="text",
+        )
+        wb = _build_reviews_workbook([row], _today, _today, False)
+        loaded = _load_wb(wb)
+        ws = loaded["Reviews"]
+        assert ws.cell(row=3, column=8).value == "—"

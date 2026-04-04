@@ -256,7 +256,9 @@ async def get_reviews_for_export(
 
     Tenant isolation: SKU.org_id == org_id is the mandatory filter, applied via JOIN.
     """
-    from app.reviews.models import Review  # local import to avoid circular dependency
+    # Local import: app.reviews.models is not imported at module level to avoid
+    # a circular dependency (reports → reviews → core → reports).
+    from app.reviews.models import Review
 
     stmt = (
         select(
@@ -283,15 +285,18 @@ async def get_reviews_for_export(
             Platform.name,
             Review.review_date.desc(),
         )
-        .limit(_ROW_LIMIT + 1)  # fetch one extra to detect truncation
     )
 
+    # Apply optional filters BEFORE limit — prevents incorrect truncation detection
     if platform_id is not None:
         stmt = stmt.where(SKUPlatform.platform_id == platform_id)
     if sentiment is not None:
         stmt = stmt.where(Review.sentiment == sentiment)
     if sku_id is not None:
         stmt = stmt.where(SKU.id == sku_id)
+
+    # Fetch one extra row to detect whether the result exceeds the cap
+    stmt = stmt.limit(_ROW_LIMIT + 1)
 
     result = await db.execute(stmt)
     raw = result.all()
