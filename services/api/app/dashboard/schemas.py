@@ -28,9 +28,9 @@ class DashboardAlert(BaseModel):
 
 
 class DashboardSummary(BaseModel):
-    avg_content_score: float
+    avg_content_score: Optional[float]    # None when org has no scored SKUs
     active_alerts_count: int
-    distribution_coverage_pct: float
+    distribution_coverage_pct: Optional[float]  # None when no distribution plan uploaded
     monitored_sku_count: int
     red_zone: list[DashboardRedZoneItem]
     recent_alerts: list[DashboardAlert]

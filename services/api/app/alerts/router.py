@@ -30,6 +30,7 @@ from app.alerts.schemas import (
     AlertConfigResponse,
     AlertConfigUpdate,
     AlertEventPage,
+    AlertEventResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -174,10 +175,11 @@ async def list_alert_events(
 async def acknowledge_alert_event(
     event_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("admin", "manager")),
 ) -> AlertEventResponse:
     """
     Mark an alert event as acknowledged (sets is_sent=True on the event row).
+    Requires admin or manager role — viewers are read-only.
     Returns 404 if the event does not belong to the current user's org.
     """
     from sqlalchemy import select, update

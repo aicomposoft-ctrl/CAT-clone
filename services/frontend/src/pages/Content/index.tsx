@@ -153,9 +153,25 @@ export default function ContentPage() {
           Сбросить фильтры
         </Button>
         <Button
-          onClick={() => {
+          onClick={async () => {
+            // Authenticated download via apiClient — window.open would send no Authorization header
             const params = new URLSearchParams(Object.fromEntries(searchParams))
-            window.open(`/api/v1/reports/content-export?${params.toString()}`, '_blank')
+            try {
+              const response = await import('../../api/client').then(m =>
+                m.default.get(`/reports/content-export?${params.toString()}`, {
+                  responseType: 'blob',
+                  timeout: 60000,
+                })
+              )
+              const url = URL.createObjectURL(response.data)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `content_scores_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.xlsx`
+              a.click()
+              URL.revokeObjectURL(url)
+            } catch {
+              // Toast handled by global error interceptor
+            }
           }}
         >
           Экспорт в Excel

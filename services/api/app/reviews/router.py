@@ -129,17 +129,10 @@ async def get_org_sentiment(
 
     from sqlalchemy import text
 
-    params: dict = {
-        "org_id": str(current_user.org_id),
-        "date_from": date_from_resolved,
-        "date_to": date_to_resolved,
-    }
-    extra_filter = ""
-    if platform_id:
-        extra_filter = "AND sp.platform_id = :platform_id"
-        params["platform_id"] = str(platform_id)
-
-    stmt = text(f"""
+    # Build parameterized SQL without f-string interpolation of user-controlled values.
+    # platform_id filter is added as a separate clause; the value is always bound via :platform_id.
+    # Org-scope is enforced via s.org_id = :org_id (derived from JWT, never from request params).
+    base_sql = """
         SELECT
             b.id                                                           AS brand_id,
             b.name                                                         AS brand_name,
@@ -153,10 +146,18 @@ async def get_org_sentiment(
         JOIN brands b         ON b.id  = s.brand_id
         WHERE s.org_id = :org_id
           AND r.review_date BETWEEN :date_from AND :date_to
-          {extra_filter}
-        GROUP BY b.id, b.name
-        ORDER BY total_reviews DESC
-    """)
+    """
+    params: dict = {
+        "org_id": str(current_user.org_id),
+        "date_from": date_from_resolved,
+        "date_to": date_to_resolved,
+    }
+    if platform_id:
+        base_sql += " AND sp.platform_id = :platform_id"
+        params["platform_id"] = str(platform_id)
+
+    base_sql += " GROUP BY b.id, b.name ORDER BY total_reviews DESC"
+    stmt = text(base_sql)
 
     rows = (await db.execute(stmt, params)).fetchall()
 
