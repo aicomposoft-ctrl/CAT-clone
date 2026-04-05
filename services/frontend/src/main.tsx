@@ -3,6 +3,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
+import { setQueryClient } from './store/authStore'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -14,6 +15,8 @@ const queryClient = new QueryClient({
     },
   },
 })
+
+setQueryClient(queryClient)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

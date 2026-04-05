@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Table,
@@ -21,14 +21,14 @@ import type { TableColumnsType } from 'antd'
 import { StarFilled } from '@ant-design/icons'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
-import dayjs, { Dayjs } from 'dayjs'
-import { reviewsApi, ReviewSummaryItem, ReviewHistoryItem, ReviewStats } from '../../api/reviews'
+import dayjs, { type Dayjs } from 'dayjs'
+import { reviewsApi, type ReviewSummaryItem, type ReviewHistoryItem, type ReviewStats } from '../../api/reviews'
+import { escHtml } from '../../api/utils'
 import { SKUSelector } from '../../components/SKUSelector'
+import { useAuthStore } from '../../store/authStore'
 
 const { Title } = Typography
 const { RangePicker } = DatePicker
-
-const DEFAULT_RANGE: [Dayjs, Dayjs] = [dayjs().subtract(29, 'day'), dayjs()]
 
 const SENTIMENT_LABELS: Record<string, { label: string; color: string }> = {
   positive: { label: 'Позитив', color: 'success' },
@@ -71,8 +71,9 @@ function buildTrendChart(stats: ReviewStats | undefined): EChartsOption {
     tooltip: {
       trigger: 'axis',
       formatter: (params: unknown) => {
-        const p = (params as { name: string; value: number }[])[0]
-        return `${p.name}: ${p.value}% позитивных`
+        if (!Array.isArray(params) || !params[0]) return ''
+        const p = params[0] as { name: string; value: number }
+        return `${escHtml(String(p.name))}: ${escHtml(String(p.value))}% позитивных`
       },
     },
     xAxis: {
@@ -93,177 +94,207 @@ function buildTrendChart(stats: ReviewStats | undefined): EChartsOption {
   }
 }
 
+// Static column definitions — no component state captured
+const summaryColumns: TableColumnsType<ReviewSummaryItem> = [
+  { title: 'Платформа', dataIndex: 'platform_name', key: 'platform_name', width: 140 },
+  {
+    title: 'Отзывов',
+    dataIndex: 'review_count',
+    key: 'review_count',
+    width: 90,
+    sorter: (a, b) => a.review_count - b.review_count,
+  },
+  {
+    title: 'Рейтинг',
+    dataIndex: 'avg_rating',
+    key: 'avg_rating',
+    width: 100,
+    render: (v: string | null) =>
+      v ? (
+        <Space size={4}>
+          <StarFilled style={{ color: '#faad14' }} />
+          {parseFloat(v).toFixed(1)}
+        </Space>
+      ) : (
+        '—'
+      ),
+  },
+  {
+    title: 'Позитив',
+    dataIndex: 'positive_pct',
+    key: 'positive_pct',
+    width: 150,
+    render: (v: string) => (
+      <Progress
+        percent={Math.round(parseFloat(v))}
+        size="small"
+        status="success"
+        style={{ margin: 0 }}
+      />
+    ),
+  },
+  {
+    title: 'Нейтрально',
+    dataIndex: 'neutral_pct',
+    key: 'neutral_pct',
+    width: 150,
+    render: (v: string) => (
+      <Progress
+        percent={Math.round(parseFloat(v))}
+        size="small"
+        style={{ margin: 0 }}
+      />
+    ),
+  },
+  {
+    title: 'Негатив',
+    dataIndex: 'negative_pct',
+    key: 'negative_pct',
+    width: 150,
+    render: (v: string) => (
+      <Progress
+        percent={Math.round(parseFloat(v))}
+        size="small"
+        status="exception"
+        style={{ margin: 0 }}
+      />
+    ),
+  },
+  {
+    title: 'Последний',
+    dataIndex: 'last_review_date',
+    key: 'last_review_date',
+    width: 110,
+    render: (v: string | null) => (v ? dayjs(v).format('DD.MM.YYYY') : '—'),
+  },
+]
+
+// Static column definitions — review_text is scraped/untrusted, rendered as text only (no dangerouslySetInnerHTML)
+const historyColumns: TableColumnsType<ReviewHistoryItem> = [
+  {
+    title: 'Дата',
+    dataIndex: 'review_date',
+    key: 'review_date',
+    width: 100,
+    render: (v: string) => dayjs(v).format('DD.MM.YYYY'),
+  },
+  { title: 'Платформа', dataIndex: 'platform_name', key: 'platform_name', width: 130 },
+  {
+    title: 'Рейтинг',
+    dataIndex: 'rating',
+    key: 'rating',
+    width: 140,
+    render: (v: number) => (
+      <Rate
+        disabled
+        value={v}
+        style={{ fontSize: 12 }}
+        aria-label={`Рейтинг: ${v} из 5`}
+      />
+    ),
+  },
+  {
+    title: 'Тональность',
+    dataIndex: 'sentiment',
+    key: 'sentiment',
+    width: 150,
+    render: (v: 'positive' | 'neutral' | 'negative' | null) => <SentimentTag sentiment={v} />,
+  },
+  {
+    title: 'Текст отзыва',
+    dataIndex: 'review_text',
+    key: 'review_text',
+    ellipsis: { showTitle: false },
+    render: (v: string) => (
+      <span title={v}>
+        {v.length > 200 ? `${v.slice(0, 200)}…` : v}
+      </span>
+    ),
+  },
+]
+
 const PAGE_SIZE = 100
 
 export default function ReviewsPage() {
+  const orgId = useAuthStore((s) => s.user?.org_id)
+
   const [skuId, setSkuId] = useState<string | undefined>()
-  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(DEFAULT_RANGE)
+  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>(
+    () => [dayjs().subtract(29, 'day'), dayjs()]
+  )
   const [sentimentFilter, setSentimentFilter] = useState<'positive' | 'neutral' | 'negative' | undefined>()
   const [reviewPage, setReviewPage] = useState(1)
 
-  const dateFrom = dateRange?.[0].format('YYYY-MM-DD')
-  const dateTo = dateRange?.[1].format('YYYY-MM-DD')
+  const dateFrom = dateRange[0].format('YYYY-MM-DD')
+  const dateTo = dateRange[1].format('YYYY-MM-DD')
 
   const summaryQuery = useQuery({
-    queryKey: ['reviews-summary', skuId, dateFrom, dateTo],
-    queryFn: () => reviewsApi.summary(skuId!, dateFrom, dateTo),
+    queryKey: ['reviews-summary', orgId, skuId, dateFrom, dateTo],
+    queryFn: () => {
+      if (!skuId) throw new Error('skuId required')
+      return reviewsApi.summary(skuId, dateFrom, dateTo)
+    },
     enabled: !!skuId,
     staleTime: 5 * 60 * 1000,
   })
 
   const statsQuery = useQuery({
-    queryKey: ['reviews-stats', skuId, dateFrom, dateTo],
-    queryFn: () => reviewsApi.stats(skuId!, dateFrom, dateTo),
+    queryKey: ['reviews-stats', orgId, skuId, dateFrom, dateTo],
+    queryFn: () => {
+      if (!skuId) throw new Error('skuId required')
+      return reviewsApi.stats(skuId, dateFrom, dateTo)
+    },
     enabled: !!skuId,
     staleTime: 5 * 60 * 1000,
   })
 
   const historyQuery = useQuery({
-    queryKey: ['reviews-history', skuId, sentimentFilter, dateFrom, dateTo, reviewPage],
-    queryFn: () =>
-      reviewsApi.history(skuId!, {
+    queryKey: ['reviews-history', orgId, skuId, sentimentFilter, dateFrom, dateTo, reviewPage],
+    queryFn: () => {
+      if (!skuId) throw new Error('skuId required')
+      return reviewsApi.history(skuId, {
         sentiment: sentimentFilter,
         dateFrom,
         dateTo,
         limit: PAGE_SIZE,
         offset: (reviewPage - 1) * PAGE_SIZE,
-      }),
+      })
+    },
     enabled: !!skuId,
     staleTime: 5 * 60 * 1000,
   })
 
-  const summaryColumns: TableColumnsType<ReviewSummaryItem> = [
-    { title: 'Платформа', dataIndex: 'platform_name', key: 'platform_name', width: 140 },
-    {
-      title: 'Отзывов',
-      dataIndex: 'review_count',
-      key: 'review_count',
-      width: 90,
-      sorter: (a, b) => a.review_count - b.review_count,
-    },
-    {
-      title: 'Рейтинг',
-      dataIndex: 'avg_rating',
-      key: 'avg_rating',
-      width: 100,
-      render: (v: string | null) =>
-        v ? (
-          <Space size={4}>
-            <StarFilled style={{ color: '#faad14' }} />
-            {parseFloat(v).toFixed(1)}
-          </Space>
-        ) : (
-          '—'
-        ),
-    },
-    {
-      title: 'Позитив',
-      dataIndex: 'positive_pct',
-      key: 'positive_pct',
-      width: 150,
-      render: (v: string) => (
-        <Progress
-          percent={Math.round(parseFloat(v))}
-          size="small"
-          status="success"
-          style={{ margin: 0 }}
-        />
-      ),
-    },
-    {
-      title: 'Нейтрально',
-      dataIndex: 'neutral_pct',
-      key: 'neutral_pct',
-      width: 150,
-      render: (v: string) => (
-        <Progress
-          percent={Math.round(parseFloat(v))}
-          size="small"
-          style={{ margin: 0 }}
-        />
-      ),
-    },
-    {
-      title: 'Негатив',
-      dataIndex: 'negative_pct',
-      key: 'negative_pct',
-      width: 150,
-      render: (v: string) => (
-        <Progress
-          percent={Math.round(parseFloat(v))}
-          size="small"
-          status="exception"
-          style={{ margin: 0 }}
-        />
-      ),
-    },
-    {
-      title: 'Последний',
-      dataIndex: 'last_review_date',
-      key: 'last_review_date',
-      width: 110,
-      render: (v: string | null) => (v ? dayjs(v).format('DD.MM.YYYY') : '—'),
-    },
-  ]
-
-  const historyColumns: TableColumnsType<ReviewHistoryItem> = [
-    {
-      title: 'Дата',
-      dataIndex: 'review_date',
-      key: 'review_date',
-      width: 100,
-      render: (v: string) => dayjs(v).format('DD.MM.YYYY'),
-    },
-    { title: 'Платформа', dataIndex: 'platform_name', key: 'platform_name', width: 130 },
-    {
-      title: 'Рейтинг',
-      dataIndex: 'rating',
-      key: 'rating',
-      width: 140,
-      render: (v: number) => (
-        <Rate
-          disabled
-          value={v}
-          style={{ fontSize: 12 }}
-          aria-label={`Рейтинг: ${v} из 5`}
-        />
-      ),
-    },
-    {
-      title: 'Тональность',
-      dataIndex: 'sentiment',
-      key: 'sentiment',
-      width: 150,
-      render: (v: 'positive' | 'neutral' | 'negative' | null) => <SentimentTag sentiment={v} />,
-    },
-    {
-      title: 'Текст отзыва',
-      dataIndex: 'review_text',
-      key: 'review_text',
-      ellipsis: { showTitle: false },
-      render: (v: string) => (
-        <span title={v}>
-          {v.length > 200 ? `${v.slice(0, 200)}…` : v}
-        </span>
-      ),
-    },
-  ]
-
   const stats = statsQuery.data
 
+  const sentimentPieOption = useMemo(() => buildSentimentPie(stats), [stats])
+  const trendChartOption = useMemo(() => buildTrendChart(stats), [stats])
+
+  const handleSkuChange = useMemo(
+    () => (v: string | undefined) => {
+      setSkuId(v)
+      setSentimentFilter(undefined)
+      setReviewPage(1)
+    },
+    [],
+  )
+
   return (
-    <div style={{ padding: '24px' }}>
+    <div style={{ padding: 24 }}>
       <Title level={3}>Отзывы и тональность</Title>
 
-      {/* Filters */}
       <Row gutter={12} style={{ marginBottom: 24 }} align="middle">
         <Col>
-          <SKUSelector value={skuId} onChange={(v) => { setSkuId(v); setSentimentFilter(undefined); setReviewPage(1) }} />
+          <SKUSelector value={skuId} onChange={handleSkuChange} />
         </Col>
         <Col>
           <RangePicker
             value={dateRange}
-            onChange={(v) => { setDateRange(v as [Dayjs, Dayjs] | null); setReviewPage(1) }}
+            onChange={(v) => {
+              if (v) {
+                setDateRange(v as [Dayjs, Dayjs])
+                setReviewPage(1)
+              }
+            }}
             format="DD.MM.YYYY"
             aria-label="Период"
             allowClear={false}
@@ -281,9 +312,10 @@ export default function ReviewsPage() {
               <Card title="Распределение тональности" size="small">
                 {stats?.sentiment_share ? (
                   <ReactECharts
-                    option={buildSentimentPie(stats)}
+                    option={sentimentPieOption}
                     style={{ height: 260 }}
-                    notMerge
+                    notMerge={false}
+                    lazyUpdate
                   />
                 ) : statsQuery.isLoading ? (
                   <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -297,8 +329,11 @@ export default function ReviewsPage() {
             <Col span={12}>
               <Card title="Общая статистика" size="small" style={{ height: '100%' }}>
                 {statsQuery.isError ? (
-                  <Alert type="error" message="Ошибка загрузки статистики"
-                    action={<Button size="small" onClick={() => statsQuery.refetch()}>Повторить</Button>} />
+                  <Alert
+                    type="error"
+                    message="Ошибка загрузки статистики"
+                    action={<Button size="small" onClick={() => statsQuery.refetch()}>Повторить</Button>}
+                  />
                 ) : (
                   <Row gutter={16}>
                     <Col span={12}>
@@ -327,9 +362,10 @@ export default function ReviewsPage() {
             <>
               <Title level={4}>Недельный тренд (позитивные отзывы %)</Title>
               <ReactECharts
-                option={buildTrendChart(stats)}
+                option={trendChartOption}
                 style={{ height: 220, marginBottom: 24 }}
-                notMerge
+                notMerge={false}
+                lazyUpdate
               />
             </>
           ) : null}

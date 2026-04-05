@@ -1,4 +1,9 @@
 import { create } from 'zustand'
+import { QueryClient } from '@tanstack/react-query'
+
+// Module-level queryClient reference — set once on app init via setQueryClient()
+let _queryClient: QueryClient | null = null
+export function setQueryClient(qc: QueryClient) { _queryClient = qc }
 
 export type Role = 'admin' | 'manager' | 'viewer'
 
@@ -26,5 +31,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   clearAuth: () => {
     sessionStorage.removeItem('refresh_token')
     set({ user: null, accessToken: null })
+    // Clear React Query cache so stale org data is not shown to next user
+    _queryClient?.clear()
   },
 }))

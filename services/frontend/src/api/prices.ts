@@ -1,4 +1,5 @@
 import apiClient from './client'
+import { cleanParams } from './utils'
 
 // Prices are Decimal on the backend — serialized as strings in JSON
 export interface PriceLatestItem {
@@ -66,9 +67,6 @@ export interface PriceStats {
   discount_avg: string | null
 }
 
-function cleanParams(obj: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && v !== ''))
-}
 
 export const pricesApi = {
   latest: (skuId: string): Promise<PriceLatestResponse> =>

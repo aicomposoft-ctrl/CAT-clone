@@ -1,9 +1,11 @@
 import apiClient from './client'
+import { cleanParams } from './utils'
 
 export interface ReviewHistoryItem {
   id: string
   platform_id: string
   platform_name: string
+  /** Scraped from external platforms — treat as untrusted. Never render as HTML. */
   review_text: string
   rating: number
   sentiment: 'positive' | 'neutral' | 'negative' | null
@@ -59,9 +61,6 @@ export interface ReviewStats {
   }[]
 }
 
-function cleanParams(obj: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && v !== ''))
-}
 
 export const reviewsApi = {
   summary: (skuId: string, dateFrom?: string, dateTo?: string): Promise<ReviewSummaryResponse> =>
