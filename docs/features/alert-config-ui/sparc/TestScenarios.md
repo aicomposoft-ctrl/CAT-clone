@@ -175,3 +175,66 @@ When I click tab "События"
 Then existing events table is shown
 And all existing functionality works as before
 ```
+
+## Edge Cases (добавлено по результатам валидации)
+
+### Scenario: SKU search in create modal
+```gherkin
+Given modal "Новая конфигурация" is open
+When I type "молок" in the SKU search field
+Then API GET /skus?search=молок is called (debounced 300ms)
+And matching SKUs appear in the dropdown
+When I select one
+Then sku_id field is set to its UUID
+```
+
+### Scenario: Switch toggle failure — optimistic update rollback
+```gherkin
+Given a config with is_active=true exists in the table
+And PATCH /api/v1/alerts/configs/{id} returns 500
+When I click the Switch
+Then Switch shows disabled state optimistically
+But after error response
+Then Switch reverts to enabled state
+And toast "Ошибка при изменении статуса" appears
+```
+
+### Scenario: Modal re-entry after failed create
+```gherkin
+Given I submitted the create form
+And API returned 422 validation error
+Then modal stays open with all entered values preserved
+And error message is shown inline
+When I fix the error and click "Создать"
+Then the form submits successfully
+```
+
+### Scenario: Email recipients truncation in table
+```gherkin
+Given a config has email_recipients = ["a@b.ru", "c@d.ru", "e@f.ru"]
+When I view the configs table
+Then column "Получатели" shows "a@b.ru, c@d.ru" + "+1 ещё"
+When I hover over "+1 ещё"
+Then tooltip shows "e@f.ru"
+```
+
+### Scenario: Config deleted by another admin while modal open
+```gherkin
+Given I opened edit modal for config X
+And another admin deleted config X in another session
+When I click "Сохранить"
+Then PATCH returns 404
+Then modal closes
+And toast "Конфигурация не найдена — обновите список" appears
+And table refreshes
+```
+
+### Scenario: Cooldown resets only on success
+```gherkin
+Given I clicked "Запустить проверку"
+And POST /alerts/check returned 500 (server error)
+Then cooldown timer does NOT start
+And button remains active immediately
+When I click again and POST returns 200
+Then 60s cooldown starts
+```
