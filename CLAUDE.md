@@ -168,6 +168,9 @@ Extracted via `/harvest` — reusable artifacts from this project.
 | multi-tenant-saas-isolation | 🔴 Alpha | org_id filtering + RLS for SaaS DB isolation | CAT, 2026-03-27 |
 | fastapi-domain-driven-layering | 🔴 Alpha | Router/Service/Repository separation for FastAPI | CAT, 2026-03-27 |
 | cache-aside-expensive-computations | 🔴 Alpha | Redis cache-aside for ML inference and slow ops | CAT, 2026-03-27 |
+| auth-context-di-pattern | 🔴 Alpha | AuthContext dataclass with __getattr__ delegation for multi-scope auth DI | CAT, 2026-04-05 |
+| api-key-hash-only-storage | 🔴 Alpha | Generate API key, store SHA-256 hash only, return full key once | CAT, 2026-04-05 |
+| postgresql-distinct-on-latest | 🔴 Alpha | DISTINCT ON CTE for latest-per-group pagination + parallel count | CAT, 2026-04-05 |
 
 ### Snippets
 | Snippet | Maturity | Description | Source |
@@ -177,13 +180,27 @@ Extracted via `/harvest` — reusable artifacts from this project.
 | excel-bytesio-streaming.py | 🔴 Alpha | Excel report generation without disk I/O | CAT, 2026-03-27 |
 | pytest-async-db-rollback-fixture.py | 🔴 Alpha | Per-test DB rollback fixture for async SQLAlchemy | CAT, 2026-03-27 |
 | sliding-window-rate-limiter-redis.py | 🔴 Alpha | Distributed rate limiter using Redis sorted sets | CAT, 2026-03-27 |
+| jwt-token-type-enforcement.py | 🔴 Alpha | decode_token with expected_type prevents access/refresh cross-use | CAT, 2026-04-05 |
+| timing-attack-dummy-hash.py | 🔴 Alpha | Pre-computed bcrypt dummy for login timing attack mitigation | CAT, 2026-04-05 |
+| async-fire-and-forget-task.py | 🔴 Alpha | asyncio.create_task with exception isolation for non-critical ops | CAT, 2026-04-05 |
 
 ### Templates
 | Template | Maturity | Description | Source |
 |----------|----------|-------------|--------|
 | python-node-docker.gitignore | 🔴 Alpha | Comprehensive .gitignore for Python+Node+Docker+ML | CAT, 2026-03-27 |
 
-Last harvest: 2026-03-27 | Total artifacts: 9 | Report: `docs/harvest-report-2026-03-27.md`
+### Rules
+| Rule | Maturity | Description | Source |
+|------|----------|-------------|--------|
+| anti-enumeration-404.md | 🔴 Alpha | Return 404 not 403 for cross-tenant resources (IDOR mitigation) | CAT, 2026-04-05 |
+
+### Hooks
+| Hook | Maturity | Description | Source |
+|------|----------|-------------|--------|
+| danger-command-blocker.md | 🔴 Alpha | PreToolUse hook blocking destructive bash patterns | CAT, 2026-04-05 |
+| session-start-context-injection.md | 🔴 Alpha | SessionStart hook injecting JSON-based project context | CAT, 2026-04-05 |
+
+Last harvest: 2026-04-05 | Total artifacts: 18 | Report: `docs/harvest-report-2026-04-05.md`
 
 ## Feature Development Lifecycle
 
