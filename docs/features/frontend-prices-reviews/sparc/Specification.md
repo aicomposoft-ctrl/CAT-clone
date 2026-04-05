@@ -248,6 +248,13 @@ export interface ReviewStats {
 ```gherkin
 Feature: Prices Page
 
+Scenario: SKU dropdown loads on page mount
+  Given I navigate to /prices
+  Then GET /api/v1/skus?page=1&size=200 is called immediately on mount
+  And the SKU Select shows a loading spinner while fetching
+  And once loaded, all org SKUs appear as options
+  And the "Latest Prices" and "Anomalies" sections show Empty component with "Выберите SKU"
+
 Scenario: Page loads with SKU selector
   Given I navigate to /prices
   Then I see a SKU dropdown (populated from /api/v1/skus)
@@ -285,9 +292,11 @@ Scenario: Page loads with SKU selector
 
 Scenario: Sentiment summary loads after SKU selection
   Given I select a SKU
-  Then GET /api/v1/reviews/summary is called
+  Then GET /api/v1/reviews/summary?sku_id=<id> is called
   And I see a table: Platform | Count | Avg Rating | Positive% | Neutral% | Negative%
-  And progress bars show sentiment distribution
+  And the Positive% column shows an Ant Design <Progress> bar with status='success' (green)
+  And the Negative% column shows an Ant Design <Progress> bar with status='exception' (red)
+  And the Neutral% column shows a <Progress> bar with default styling
 
 Scenario: Sentiment pie chart renders
   Given /api/v1/reviews/stats returns sentiment_share
