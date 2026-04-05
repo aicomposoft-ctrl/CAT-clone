@@ -69,6 +69,11 @@ app = FastAPI(
     redoc_url=None if _is_production else "/redoc",
 )
 
+@app.get("/health", tags=["health"], include_in_schema=False)
+async def health_check() -> dict:
+    return {"status": "ok"}
+
+
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(clients_router, prefix="/api/v1/clients", tags=["clients"])
 app.include_router(api_keys_router, prefix="/api/v1/api-keys", tags=["api-keys"])
