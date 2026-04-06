@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Alert, Button, Modal, Space, message } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
+import { AxiosError } from 'axios'
 import { useAlertConfigs } from '../hooks/useAlertConfigs'
 import { useAuthStore } from '../../../store/authStore'
 import AlertConfigTable from './AlertConfigTable'
@@ -35,6 +36,14 @@ export default function AlertConfigTab() {
 
   // ── Submit handler ───────────────────────────────────────────────────────
 
+  const resolveApiError = (err: unknown): string => {
+    const status = (err instanceof AxiosError ? err : null)?.response?.status
+    if (status === 404) return 'Конфигурация не найдена — обновите список'
+    if (status === 422) return 'Неверные данные — проверьте форму'
+    if (status === 429) return 'Слишком много запросов, попробуйте позже'
+    return null as unknown as string // falls through to caller default
+  }
+
   const handleSubmit = (data: AlertConfigCreateRequest) => {
     if (modalState.mode === 'create') {
       createMutation.mutate(data, {
@@ -42,13 +51,8 @@ export default function AlertConfigTab() {
           closeModal()
           message.success('Конфигурация создана')
         },
-        onError: (err: unknown) => {
-          const status = (err as { response?: { status?: number } })?.response?.status
-          if (status === 404) {
-            message.error('Конфигурация не найдена — обновите список')
-          } else {
-            message.error('Ошибка при создании конфигурации')
-          }
+        onError: (err) => {
+          message.error(resolveApiError(err) || 'Ошибка при создании конфигурации')
         },
       })
     } else if (modalState.mode === 'edit') {
@@ -59,10 +63,11 @@ export default function AlertConfigTab() {
             closeModal()
             message.success('Изменения сохранены')
           },
-          onError: (err: unknown) => {
-            const status = (err as { response?: { status?: number } })?.response?.status
-            if (status === 404) {
-              message.error('Конфигурация не найдена — обновите список')
+          onError: (err) => {
+            const msg = resolveApiError(err)
+            if (msg) {
+              if ((err instanceof AxiosError ? err.response?.status : null) === 404) closeModal()
+              message.error(msg)
             } else {
               message.error('Ошибка при сохранении изменений')
             }
@@ -86,13 +91,8 @@ export default function AlertConfigTab() {
           onSuccess: () => {
             message.success('Конфигурация удалена')
           },
-          onError: (err: unknown) => {
-            const status = (err as { response?: { status?: number } })?.response?.status
-            if (status === 404) {
-              message.error('Конфигурация не найдена — обновите список')
-            } else {
-              message.error('Ошибка при удалении конфигурации')
-            }
+          onError: (err) => {
+            message.error(resolveApiError(err) || 'Ошибка при удалении конфигурации')
           },
         })
       },

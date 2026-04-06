@@ -46,6 +46,8 @@ export function useAlertCheck() {
     onError: (err) => {
       const status = (err as AxiosError).response?.status
       if (status === 429) {
+        // Server-side rate limit hit — start cooldown to match server window
+        setCooldownUntil(Date.now() + 60_000)
         message.warning('Слишком много запросов, подождите 1 минуту')
       } else {
         message.error('Ошибка при запуске проверки')

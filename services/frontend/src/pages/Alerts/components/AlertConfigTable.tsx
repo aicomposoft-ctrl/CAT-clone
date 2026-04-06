@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Tag, Switch, Button, Space, Tooltip } from 'antd'
 import type { TableColumnsType } from 'antd'
@@ -67,9 +67,15 @@ export default function AlertConfigTable({
     [platforms],
   )
 
-  // ── Columns ────────────────────────────────────────────────────────────────
+  const handleToggle = useCallback(
+    (record: AlertConfig) =>
+      updateMutation.mutate({ id: record.id, data: { is_active: !record.is_active } }),
+    [updateMutation],
+  )
 
-  const columns: TableColumnsType<AlertConfig> = [
+  // ── Columns (memoized to prevent recreation on every render) ────────────────
+
+  const columns = useMemo<TableColumnsType<AlertConfig>>(() => [
     {
       title: 'Тип',
       dataIndex: 'alert_type',
@@ -145,15 +151,7 @@ export default function AlertConfigTable({
           checked={isActive}
           disabled={!canManage}
           aria-label={`Активировать конфигурацию ${record.alert_type}`}
-          onClick={
-            canManage
-              ? () =>
-                  updateMutation.mutate({
-                    id: record.id,
-                    data: { is_active: !isActive },
-                  })
-              : undefined
-          }
+          onClick={canManage ? () => handleToggle(record) : undefined}
         />
       ),
     },
@@ -176,7 +174,8 @@ export default function AlertConfigTable({
           } as TableColumnsType<AlertConfig>[number],
         ]
       : []),
-  ]
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [skuMap, platformMap, canManage, handleToggle, onEdit, onDelete])
 
   // ── Render ─────────────────────────────────────────────────────────────────
 

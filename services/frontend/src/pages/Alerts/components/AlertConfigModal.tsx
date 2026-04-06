@@ -56,10 +56,11 @@ export default function AlertConfigModal({ mode, config, onSubmit, onCancel, isS
   }, [])
 
   // ── Data fetching ────────────────────────────────────────────────────────
+  // Load SKUs once (backend has no search param) — filter client-side
   const { data: skusData } = useQuery({
-    queryKey: ['skus', { limit: 50, search: debouncedSkuSearch }],
-    queryFn: () => skusApi.list({ limit: 50 }),
-    staleTime: 30_000,
+    queryKey: ['skus', { limit: 200 }],
+    queryFn: () => skusApi.list({ limit: 200 }),
+    staleTime: 5 * 60_000,
   })
   const skus = skusData?.items ?? []
 
