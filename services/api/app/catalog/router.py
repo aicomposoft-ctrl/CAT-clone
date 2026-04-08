@@ -212,6 +212,15 @@ async def list_platforms(
 # SKUPlatform endpoints
 # ---------------------------------------------------------------------------
 
+@sku_platform_router.get("", response_model=list[SKUPlatformResponse])
+async def list_sku_platforms(
+    sku_id: UUID = Query(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[SKUPlatformResponse]:
+    return await catalog_service.list_sku_platforms(db, user.org_id, sku_id)
+
+
 @sku_platform_router.post("", response_model=SKUPlatformResponse, status_code=status.HTTP_201_CREATED)
 async def create_sku_platform(
     body: SKUPlatformCreateRequest,

@@ -60,10 +60,13 @@ class MinioClient:
     PRESIGNED_TTL = 3600  # 1 hour
     ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
-    def __init__(self, endpoint: str, access_key: str, secret_key: str) -> None:
+    def __init__(self, endpoint: str, access_key: str, secret_key: str,
+                 public_endpoint: str | None = None) -> None:
         self._endpoint = endpoint
         self._access_key = access_key
         self._secret_key = secret_key
+        # Public endpoint for presigned URLs (rewrite internal hostname to public one)
+        self._public_endpoint = public_endpoint or endpoint
 
     @classmethod
     def from_env(cls) -> "MinioClient":
@@ -71,6 +74,7 @@ class MinioClient:
             endpoint=os.environ["MINIO_ENDPOINT"],
             access_key=os.environ["MINIO_ACCESS_KEY"],
             secret_key=os.environ["MINIO_SECRET_KEY"],
+            public_endpoint=os.environ.get("MINIO_PUBLIC_ENDPOINT"),
         )
 
     def _make_client(self):
@@ -157,6 +161,12 @@ class MinioClient:
                     "get_object",
                     Params={"Bucket": self.BUCKET, "Key": s3_key},
                     ExpiresIn=expires,
+                )
+            # Rewrite internal hostname to public endpoint so browsers can reach MinIO
+            if self._public_endpoint != self._endpoint:
+                url = url.replace(
+                    f"http://{self._endpoint}",
+                    f"http://{self._public_endpoint}",
                 )
             return url
         except Exception as exc:

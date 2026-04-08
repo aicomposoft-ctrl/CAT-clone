@@ -2,7 +2,6 @@
 
 import uuid
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Optional
 
 from pydantic import BaseModel
@@ -23,10 +22,10 @@ class ContentScoreItem(BaseModel):
     platform_url: Optional[str]
 
     scored_at: date
-    content_total: Optional[Decimal]
-    image_score: Optional[Decimal]
-    description_score: Optional[Decimal]
-    composition_score: Optional[Decimal]
+    content_total: Optional[float]
+    image_score: Optional[float]
+    description_score: Optional[float]
+    composition_score: Optional[float]
 
     collected_image_url: Optional[str]
     created_at: datetime
@@ -43,7 +42,7 @@ class ContentScorePage(BaseModel):
 
 class ContentScoreHistory(BaseModel):
     scored_at: date
-    content_total: Optional[Decimal]
+    content_total: Optional[float]
 
 
 class ContentScoreDrilldown(ContentScoreItem):

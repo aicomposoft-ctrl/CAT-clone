@@ -30,3 +30,9 @@ openpyxl==3.1.5
 
 # Async email (optional — alerts degrade gracefully if not installed)
 aiosmtplib==3.0.2
+
+# MinIO / S3 async client
+aioboto3==13.3.0
+
+# Redis async client (embedding cache + rate limiting)
+redis[asyncio]==5.2.1

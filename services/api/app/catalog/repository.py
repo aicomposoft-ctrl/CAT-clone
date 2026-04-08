@@ -300,6 +300,19 @@ class SKUPlatformRepository:
         return sp
 
     @staticmethod
+    async def list_by_sku(
+        db: AsyncSession, sku_id: UUID, org_id: UUID
+    ) -> list[SKUPlatform]:
+        """List all sku_platform rows for a given SKU, verifying org via JOIN."""
+        result = await db.execute(
+            select(SKUPlatform)
+            .join(SKU, SKU.id == SKUPlatform.sku_id)
+            .where(SKUPlatform.sku_id == sku_id, SKU.org_id == org_id)
+            .order_by(SKUPlatform.created_at)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
     async def delete(db: AsyncSession, sp: SKUPlatform) -> None:
         await db.execute(delete(SKUPlatform).where(SKUPlatform.id == sp.id))
         await db.commit()

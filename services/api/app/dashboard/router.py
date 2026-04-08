@@ -11,11 +11,11 @@ Returns:
   - red_zone: top-5 lowest-scoring SKU-platform pairs
   - recent_alerts: last 5 alert events
 
-Performance: all 6 DB queries are issued concurrently via asyncio.gather.
-Correlated subqueries replaced with DISTINCT ON for O(n log n) index scans.
+Performance: 6 DB queries executed sequentially on one session (asyncpg does not
+support concurrent use of a single connection). Correlated subqueries replaced
+with DISTINCT ON for O(n log n) index scans.
 """
 
-import asyncio
 import logging
 from uuid import UUID
 
@@ -143,22 +143,13 @@ async def _build_summary(db: AsyncSession, org_id: UUID) -> DashboardSummary:
         LIMIT 5
     """)
 
-    # Fire all 6 queries concurrently
-    (
-        avg_result,
-        alerts_result,
-        dist_result,
-        monitored_result,
-        red_zone_result,
-        recent_alerts_result,
-    ) = await asyncio.gather(
-        db.execute(avg_stmt, p),
-        db.execute(alerts_stmt, p),
-        db.execute(dist_stmt, p),
-        db.execute(monitored_stmt, p),
-        db.execute(red_zone_stmt, p),
-        db.execute(recent_alerts_stmt, p),
-    )
+    # Execute sequentially — asyncpg does not support concurrent use of one connection
+    avg_result = await db.execute(avg_stmt, p)
+    alerts_result = await db.execute(alerts_stmt, p)
+    dist_result = await db.execute(dist_stmt, p)
+    monitored_result = await db.execute(monitored_stmt, p)
+    red_zone_result = await db.execute(red_zone_stmt, p)
+    recent_alerts_result = await db.execute(recent_alerts_stmt, p)
 
     avg_row = avg_result.fetchone()
     avg_content_score = float(avg_row.avg_score) if avg_row and avg_row.avg_score else None

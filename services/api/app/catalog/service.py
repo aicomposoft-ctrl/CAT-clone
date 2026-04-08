@@ -305,6 +305,13 @@ async def list_platforms(db: AsyncSession) -> PlatformListResponse:
 # SKUPlatform
 # ---------------------------------------------------------------------------
 
+async def list_sku_platforms(
+    db: AsyncSession, org_id: UUID, sku_id: UUID
+) -> list[SKUPlatformResponse]:
+    rows = await SKUPlatformRepository.list_by_sku(db, sku_id, org_id)
+    return [SKUPlatformResponse.model_validate(r) for r in rows]
+
+
 async def create_sku_platform(
     db: AsyncSession, org_id: UUID, data: SKUPlatformCreateRequest
 ) -> SKUPlatformResponse:

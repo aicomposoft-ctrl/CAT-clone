@@ -16,7 +16,6 @@ Performance notes:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import date
 from typing import Optional
@@ -113,10 +112,8 @@ async def fetch_scores_page(
         f"{base_cte} ORDER BY latest.content_total ASC NULLS LAST LIMIT :limit OFFSET :offset"
     )
 
-    count_result, data_result = await asyncio.gather(
-        db.execute(count_stmt, params),
-        db.execute(data_stmt, params),
-    )
+    count_result = await db.execute(count_stmt, params)
+    data_result = await db.execute(data_stmt, params)
 
     total = count_result.scalar_one()
     rows = data_result.fetchall()

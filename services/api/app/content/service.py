@@ -72,12 +72,8 @@ async def get_content_drilldown(
     org_id: UUID,
     sku_platform_id: UUID,
 ) -> Optional[ContentScoreDrilldown]:
-    import asyncio
-
-    row, history_rows = await asyncio.gather(
-        repository.fetch_drilldown(db, org_id, sku_platform_id),
-        repository.fetch_history(db, org_id, sku_platform_id, days=30),
-    )
+    row = await repository.fetch_drilldown(db, org_id, sku_platform_id)
+    history_rows = await repository.fetch_history(db, org_id, sku_platform_id, days=30)
     if row is None:
         return None
     history = [
