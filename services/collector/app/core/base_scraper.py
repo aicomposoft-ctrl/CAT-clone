@@ -100,7 +100,7 @@ class BaseScraper(ABC):
             proxy = self._proxy.next()
             headers = kwargs.pop("headers", {})
             headers.setdefault("User-Agent", self._next_ua())
-            async with httpx.AsyncClient(proxy=proxy, timeout=30.0) as client:
+            async with httpx.AsyncClient(proxy=proxy, timeout=30.0, follow_redirects=True) as client:
                 return await client.get(url, headers=headers, **kwargs)
 
     async def with_retry(self, coro_fn, max_retries: int = 3):
