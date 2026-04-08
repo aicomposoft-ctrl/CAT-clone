@@ -87,7 +87,7 @@ SPARC column: P1=docs · P2=validation · P3=impl · P4=review. ✅ all phases �
 | 19 | API public endpoints | P1 | 9 | 13 | ✅ Done | ✅ P1·P2·P3·P4 |
 | 20 | Multi-client support | P1 | 10 | 13 | ✅ Done | ✅ P1·P2·P3·P4 |
 | 21 | Alert Config UI | P1 | 11 | 8 | ✅ Done | ✅ P1·P2·P3·P4 |
-| 22 | Platform Management | P1 | 11 | 5 | 🔲 Planned | 🔲 |
+д| 22 | Platform Management | P1 | 11 | 5 | 🔲 Planned | 🔲 |
 | 23 | ML Config (scoring weights) | P1 | 12 | 8 | 🔲 Planned | 🔲 |
 | 24 | Scraper Config (rate/proxy) | P1 | 12 | 8 | 🔲 Planned | 🔲 |
 | 25 | Content Excel Report v2 | P1 | 13 | 5 | 🔲 Planned | 🔲 |
