@@ -11,6 +11,7 @@ const DistributionPage = lazy(() => import('./pages/Distribution'))
 const AlertsPage = lazy(() => import('./pages/Alerts'))
 const PricesPage = lazy(() => import('./pages/Prices'))
 const ReviewsPage = lazy(() => import('./pages/Reviews'))
+const SettingsPage = lazy(() => import('./pages/Settings'))
 
 const Fallback = () => (
   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
@@ -40,7 +41,7 @@ export default function App() {
         {/* Protected — admin + manager only */}
         <Route element={<ProtectedRoute allowedRoles={['admin', 'manager']} />}>
           <Route element={<AppLayout />}>
-            <Route path="/settings/skus" element={<div style={{ padding: 24 }}>SKU Settings — coming soon</div>} />
+            <Route path="/settings/skus" element={<SettingsPage />} />
           </Route>
         </Route>
 
