@@ -13,14 +13,17 @@ These replace the existing single-column indexes which are superseded by the
 composite ones (PostgreSQL can use the leftmost prefix).
 """
 
+from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-# Alembic-style migration — upgrade/downgrade functions
-# Can be applied manually or integrated into Alembic env.py.
+revision = "0010"
+down_revision = "0009"
+branch_labels = None
+depends_on = None
 
 
-def upgrade(op) -> None:  # noqa: ANN001
+def upgrade() -> None:
     # ------------------------------------------------------------------ #
     # 1. stock_history: written by collector, read by dashboard/reports   #
     # ------------------------------------------------------------------ #
@@ -72,7 +75,7 @@ def upgrade(op) -> None:  # noqa: ANN001
     )
 
 
-def downgrade(op) -> None:  # noqa: ANN001
+def downgrade() -> None:
     op.drop_index("idx_sku_platforms_monitored", table_name="sku_platforms")
     op.drop_index("idx_alert_events_org_sent", table_name="alert_events")
     op.execute("DROP INDEX IF EXISTS idx_alert_events_org_triggered")

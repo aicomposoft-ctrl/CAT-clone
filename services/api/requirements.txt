@@ -36,3 +36,4 @@ aioboto3==13.3.0
 
 # Redis async client (embedding cache + rate limiting)
 redis[asyncio]==5.2.1
+psycopg2-binary==2.9.9

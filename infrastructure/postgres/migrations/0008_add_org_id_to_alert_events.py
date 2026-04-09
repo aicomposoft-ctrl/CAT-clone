@@ -13,6 +13,11 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
+revision = "0008"
+down_revision = "0007"
+branch_labels = None
+depends_on = None
+
 
 def upgrade() -> None:
     # Step 1: add nullable so existing rows are accepted.
