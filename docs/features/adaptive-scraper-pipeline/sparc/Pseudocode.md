@@ -20,8 +20,11 @@ class ScraperRouter:
         org_id: UUID,
     ) -> ScrapedData:
 
-        platform = await self._get_platform(platform_id, org_id)  # org_id filter!
-        chain = self._build_chain(platform)
+        platform = await self._get_platform(platform_id)
+        # Токены и fallback_chain загружаются из org_platform_credentials (per-org!)
+        # Это критично для multi-tenant изоляции — нельзя читать токены другого org
+        creds = await self._get_org_credentials(platform_id, org_id)
+        chain = self._build_chain(platform, creds)
 
         last_error = None
         for scraper in chain:
@@ -50,31 +53,43 @@ class ScraperRouter:
 
         raise ScraperError("ALL_LEVELS_FAILED", str(last_error))
 
-    def _build_chain(self, platform: Platform) -> list[BaseScraper]:
-        chain_spec = platform.fallback_chain or self._default_chain(platform)
+    def _build_chain(self, platform: Platform, creds: OrgPlatformCredentials | None) -> list[BaseScraper]:
+        # fallback_chain берётся из per-org creds (если задан), иначе — платформенный default
+        chain_spec = (creds.fallback_chain if creds else None) or self._default_chain(creds)
         scrapers = []
         for level in chain_spec:
-            scraper = self._instantiate(level, platform)
+            scraper = self._instantiate(level, platform, creds)
             if scraper:
                 scrapers.append(scraper)
         return scrapers
 
-    def _default_chain(self, platform: Platform) -> list[str]:
-        if platform.api_token_encrypted:
+    def _default_chain(self, creds: OrgPlatformCredentials | None) -> list[str]:
+        if creds and creds.api_token_encrypted:
             return ["l0", "l2"]
         return ["l1", "l2"]
 
-    def _instantiate(self, level: str, platform: Platform):
-        if level == "l0" and platform.api_token_encrypted:
-            token = decrypt_token(platform.api_token_encrypted)
-            return L0_REGISTRY[platform.api_token_type](token)
+    def _instantiate(self, level: str, platform: Platform, creds: OrgPlatformCredentials | None):
+        if level == "l0" and creds and creds.api_token_encrypted:
+            # Декриптация происходит лениво — только когда уровень действительно используется
+            token = decrypt_token(creds.api_token_encrypted)
+            return L0_REGISTRY[creds.api_token_type](token)
         if level == "l1":
             return L1_REGISTRY[platform.name]()
         if level == "l2":
-            return PlaywrightScraper(platform)
+            selectors = creds.selectors if creds else {}
+            return PlaywrightScraper(platform, selectors)
         if level == "l3":
             return AgentScraper(platform, self._redis)
         return None
+
+    async def _get_org_credentials(self, platform_id: UUID, org_id: UUID) -> OrgPlatformCredentials | None:
+        """Загружает per-org credentials. Возвращает None если не настроены."""
+        result = await self._db.execute(
+            select(OrgPlatformCredentials)
+            .where(OrgPlatformCredentials.platform_id == platform_id)
+            .where(OrgPlatformCredentials.org_id == org_id)  # обязательный tenant filter
+        )
+        return result.scalar_one_or_none()
 ```
 
 ---
@@ -264,12 +279,12 @@ class AgentScraper(BaseScraper):
         async with PlaywrightContext() as page:
             await page.goto(url, wait_until="networkidle", timeout=30_000)
 
-            # Accessibility tree snapshot
-            snapshot = await page.accessibility.snapshot(interesting_only=True)
-            snapshot_text = self._flatten_snapshot(snapshot)
+            # ARIA snapshot через Playwright Python API (page.accessibility.snapshot()
+            # существует только в Node.js Playwright — в Python используем aria_snapshot())
+            aria_text = await page.locator("body").aria_snapshot()
 
             # Claude extraction
-            prompt = EXTRACTION_PROMPTS[data_type]
+            system_prompt = EXTRACTION_PROMPTS[data_type]  # инструкции — в system prompt
             cache_key = f"agent_result:{self._platform.id}:{hash(url)}:{data_type}"
 
             # Проверяем кеш
@@ -280,9 +295,15 @@ class AgentScraper(BaseScraper):
             response = await self._claude.messages.create(
                 model="claude-haiku-4-5-20251001",  # быстро и дёшево
                 max_tokens=1024,
+                system=system_prompt,  # инструкции в system prompt (защита от injection)
                 messages=[{
                     "role": "user",
-                    "content": f"{prompt}\n\nACCESSIBILITY TREE:\n{snapshot_text[:8000]}"
+                    "content": (
+                        "<accessibility_tree>\n"
+                        f"{aria_text[:8000]}\n"
+                        "</accessibility_tree>"
+                        # XML-теги изолируют контент страницы от инструкций Claude
+                    ),
                 }],
             )
 
@@ -292,18 +313,6 @@ class AgentScraper(BaseScraper):
             # Кешируем на 1 час
             await self._redis.set(cache_key, raw_json, ex=3600)
             return result
-
-    def _flatten_snapshot(self, node: dict, depth: int = 0) -> str:
-        """Конвертирует accessibility tree в читаемый текст."""
-        lines = []
-        role = node.get("role", "")
-        name = node.get("name", "")
-        value = node.get("value", "")
-        if name or value:
-            lines.append(f"{'  ' * depth}{role}: {name or value}")
-        for child in node.get("children", []):
-            lines.extend(self._flatten_snapshot(child, depth + 1).split("\n"))
-        return "\n".join(lines)
 
     def _validate_and_parse(self, raw_json: str, data_type: DataType) -> ScrapedData:
         try:
@@ -329,27 +338,42 @@ revision = "0014"
 down_revision = "0013"
 
 def upgrade() -> None:
+    # 1. Глобальный scraper_mode на таблице platforms (без per-org секретов)
     op.add_column("platforms", sa.Column("scraper_mode",
         sa.String(20), nullable=False, server_default="auto"))
-    op.add_column("platforms", sa.Column("api_token_encrypted",
-        sa.Text(), nullable=True))
-    op.add_column("platforms", sa.Column("api_token_type",
-        sa.String(20), nullable=True))
-    op.add_column("platforms", sa.Column("fallback_chain",
-        postgresql.JSONB(), nullable=True))
-    op.add_column("platforms", sa.Column("selectors",
-        postgresql.JSONB(), nullable=True))
 
-    # Аудит-поле в content_scores
+    # 2. Per-org credentials — отдельная таблица для multi-tenant изоляции
+    #    api_token_encrypted НЕ добавляется в platforms (нарушило бы tenant isolation)
+    op.create_table(
+        "org_platform_credentials",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True,
+                  server_default=sa.text("gen_random_uuid()")),
+        sa.Column("org_id", postgresql.UUID(as_uuid=True),
+                  sa.ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("platform_id", postgresql.UUID(as_uuid=True),
+                  sa.ForeignKey("platforms.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("api_token_encrypted", sa.Text(), nullable=True),
+        sa.Column("api_token_type", sa.String(20), nullable=True),
+        sa.Column("fallback_chain", postgresql.JSONB(), nullable=True),
+        sa.Column("selectors", postgresql.JSONB(), nullable=True),
+        sa.Column("created_at", sa.TIMESTAMP(timezone=True),
+                  server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.TIMESTAMP(timezone=True),
+                  server_default=sa.func.now(), nullable=False),
+        sa.UniqueConstraint("org_id", "platform_id", name="uq_org_platform_cred"),
+    )
+    op.create_index("idx_org_platform_cred_org", "org_platform_credentials", ["org_id"])
+
+    # 3. Аудит-поля для отслеживания использованного уровня скрапинга
     op.add_column("content_scores", sa.Column("scraper_level",
         sa.SmallInteger(), nullable=True))
     op.add_column("price_snapshots", sa.Column("scraper_level",
         sa.SmallInteger(), nullable=True))
 
 def downgrade() -> None:
-    for col in ["scraper_mode", "api_token_encrypted", "api_token_type",
-                "fallback_chain", "selectors"]:
-        op.drop_column("platforms", col)
-    op.drop_column("content_scores", "scraper_level")
     op.drop_column("price_snapshots", "scraper_level")
+    op.drop_column("content_scores", "scraper_level")
+    op.drop_index("idx_org_platform_cred_org", table_name="org_platform_credentials")
+    op.drop_table("org_platform_credentials")
+    op.drop_column("platforms", "scraper_mode")
 ```

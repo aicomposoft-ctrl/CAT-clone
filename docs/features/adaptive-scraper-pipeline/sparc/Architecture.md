@@ -131,36 +131,69 @@ class AgentScraper(BaseScraper):
 
     async def collect(self, url: str, data_type: DataType) -> ScrapedData:
         # 1. Playwright открывает страницу
-        # 2. page.accessibility.snapshot() → дерево доступности
-        # 3. Отправляем в Claude API:
-        #    "Из этого accessibility tree извлеки: название, цену, остаток"
-        # 4. Claude возвращает JSON
-        # 5. Валидируем через Pydantic
+        # 2. page.locator("body").aria_snapshot() → ARIA tree (Playwright Python ≥1.41)
+        #    ВНИМАНИЕ: page.accessibility.snapshot() есть только в Node.js Playwright,
+        #    в Python Playwright эта API недоступна. Используем aria_snapshot().
+        # 3. Снапшот оборачиваем в XML-теги для защиты от prompt injection:
+        #    <accessibility_tree>...</accessibility_tree>
+        # 4. Инструкции по извлечению — в system prompt (не в user message)
+        # 5. Claude возвращает JSON → валидируем через Pydantic
 ```
+
+### Отдельный Celery-сервис для Playwright
+
+Playwright несовместим с Celery prefork pool (Chromium не является fork-safe). L2/L3 задачи
+должны выполняться в отдельном воркере с `--pool=solo`:
+
+```yaml
+# docker-compose.yml
+collector-playwright:
+  image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+  command: celery -A app.celery_app worker -Q playwright --pool=solo --concurrency=1
+  environment:
+    - PLAYWRIGHT_QUEUE=playwright
+```
+
+Основной `collector` (prefork) обрабатывает L0/L1 задачи. ScraperRouter автоматически
+направляет L2/L3 задачи в очередь `playwright` через `.apply_async(queue="playwright")`.
 
 ---
 
-## 3. Изменения в БД (Platform)
+## 3. Изменения в БД
 
+### Глобальная таблица platforms (только общие настройки)
 ```sql
--- Новые поля в таблице platforms
+-- Добавляем только глобальный режим по умолчанию
 ALTER TABLE platforms ADD COLUMN scraper_mode VARCHAR(20) DEFAULT 'auto';
--- Значения: 'auto' | 'http' | 'playwright' | 'agent' | 'seller_api'
+-- Значения: 'auto' | 'http' | 'playwright' | 'agent'
+-- api_token_encrypted НЕ хранится здесь — только в org_platform_credentials
+```
 
-ALTER TABLE platforms ADD COLUMN api_token_encrypted TEXT;
--- Зашифровано через Fernet (PLATFORM_SECRET_KEY env var)
-
-ALTER TABLE platforms ADD COLUMN api_token_type VARCHAR(20);
--- 'wb_seller' | 'ozon_seller' | null
-
-ALTER TABLE platforms ADD COLUMN fallback_chain JSONB DEFAULT '["l1","l2"]';
--- Конфигурируемая цепочка fallback
+### Новая таблица org_platform_credentials (per-org токены)
+```sql
+-- Токены хранятся per-org, а не в глобальной таблице platforms
+-- Это обязательно для multi-tenant изоляции: нельзя допустить, чтобы
+-- org_b использовала токен org_a через тот же platform_id
+CREATE TABLE org_platform_credentials (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    platform_id UUID NOT NULL REFERENCES platforms(id) ON DELETE CASCADE,
+    api_token_encrypted TEXT,          -- Fernet-зашифрован
+    api_token_type VARCHAR(20),        -- 'wb_seller' | 'ozon_seller' | null
+    fallback_chain JSONB,              -- ["l0","l2"] — переопределяет платформенный default
+    selectors JSONB,                   -- {"price": "span.price", "title": "h1"}
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (org_id, platform_id)
+);
+CREATE INDEX idx_org_platform_cred_org ON org_platform_credentials(org_id);
 ```
 
 ```sql
--- Новое поле в content_scores / price_snapshots для аудита
+-- Аудит-поле в content_scores / price_snapshots
 ALTER TABLE content_scores ADD COLUMN scraper_level SMALLINT;
 -- 0=seller_api, 1=http, 2=playwright, 3=agent
+ALTER TABLE price_snapshots ADD COLUMN scraper_level SMALLINT;
 ```
 
 ---
@@ -168,26 +201,30 @@ ALTER TABLE content_scores ADD COLUMN scraper_level SMALLINT;
 ## 4. Конфигурация платформ (пример)
 
 ```python
-# WB с токеном → L0 приоритет
-Platform(
-    name="Wildberries",
-    scraper_mode="auto",
+# Глобальная запись платформы (без токенов)
+Platform(name="Wildberries", scraper_mode="auto")
+Platform(name="Самокат", scraper_mode="playwright")
+
+# Per-org credentials (токен хранится изолированно per org)
+OrgPlatformCredentials(
+    org_id=org_a.id,
+    platform_id=WB_PLATFORM_ID,
     api_token_type="wb_seller",
     api_token_encrypted=encrypt("Bearer eyJ..."),
     fallback_chain=["l0", "l2"],  # L0 → L2, пропускаем L1 (wbaas блокирует)
 )
 
-# Samocat → только L2
-Platform(
-    name="Самокат",
-    scraper_mode="playwright",
-    fallback_chain=["l2", "l3"],
+# Org без токена — только L2
+OrgPlatformCredentials(
+    org_id=org_b.id,
+    platform_id=WB_PLATFORM_ID,
+    fallback_chain=["l2"],
 )
 
 # Новая неизвестная платформа → L3
-Platform(
-    name="NewRetailer",
-    scraper_mode="agent",
+OrgPlatformCredentials(
+    org_id=org_c.id,
+    platform_id=NEW_PLATFORM_ID,
     fallback_chain=["l3"],
 )
 ```

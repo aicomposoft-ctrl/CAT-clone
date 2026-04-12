@@ -36,11 +36,12 @@
 - **FR-04.6:** Кеш промптов в Redis: `agent_prompt:{platform_id}:{data_type}` TTL 24h
 
 ### FR-05: Конфигурация платформ
-- **FR-05.1:** Поле `scraper_mode` в таблице `platforms`: auto|http|playwright|agent
-- **FR-05.2:** Поле `api_token_encrypted` — зашифрован Fernet
-- **FR-05.3:** Поле `fallback_chain` — JSONB массив: `["l0","l1","l2","l3"]`
-- **FR-05.4:** Поле `selectors` — JSONB: `{"price": "span.price", "title": "h1.product-title"}`
-- **FR-05.5:** API для CRUD платформ обновляется (Feature #22) — здесь только миграция
+- **FR-05.1:** Поле `scraper_mode` в таблице `platforms`: auto|http|playwright|agent (глобальный default)
+- **FR-05.2:** Таблица `org_platform_credentials` — per-org конфигурация (токены, selectors, fallback_chain)
+- **FR-05.3:** Поле `api_token_encrypted` в `org_platform_credentials` — зашифрован Fernet
+- **FR-05.4:** Поле `fallback_chain` в `org_platform_credentials` — JSONB: `["l0","l1","l2","l3"]`
+- **FR-05.5:** Поле `selectors` в `org_platform_credentials` — JSONB: `{"price": "span.price", "title": "h1.product-title"}`
+- **FR-05.6:** API для CRUD org_platform_credentials обновляется (Feature #22) — здесь только миграция
 
 ---
 
@@ -69,7 +70,37 @@
 
 ---
 
-## Граничные случаи
+## BDD Сценарии
+
+### Happy Path
+
+```gherkin
+Scenario: L0 success — WB Seller API returns product data
+  Given платформа WB, org_id=org_a, есть валидный api_token_encrypted в org_platform_credentials
+  And fallback_chain = ["l0", "l2"]
+  When ScraperRouter.collect(WB_PLATFORM_ID, nm_id, DataType.CONTENT, org_a.id)
+  Then возвращает ContentData с title, description, image_url
+  And result.scraper_level == 0
+  And запись в content_scores с scraper_level=0
+
+Scenario: L2 XHR interception resolves product JSON
+  Given платформа Самокат, scraper_mode='playwright'
+  And страница при загрузке делает XHR GET /api/v1/products/{id}
+  And ответ XHR содержит {"name": "...", "price": 199.0}
+  When PlaywrightScraper.collect(url, DataType.PRICE)
+  Then PriceData распарсена из перехваченного JSON
+  And DOM-селекторы не использовались
+
+Scenario: L3 agent extracts data from accessibility tree
+  Given платформа NewRetailer, fallback_chain = ["l3"]
+  When AgentScraper.collect(url, DataType.CONTENT)
+  Then page.locator("body").aria_snapshot() вызван
+  And снапшот отправлен в Claude claude-haiku-4-5-20251001 в XML-обёртке
+  And JSON ответ прошёл Pydantic валидацию против ContentData
+  And результат сохранён в Redis с TTL=3600
+```
+
+### Граничные случаи
 
 | Сценарий | Ожидаемое поведение |
 |----------|---------------------|
@@ -77,9 +108,11 @@
 | L2 страница не загрузилась за 30 сек | Screenshot → MinIO, fallback → L3 |
 | L3 Claude вернул невалидный JSON | ScraperError("AGENT_EXTRACTION_FAILED"), задача в DLQ |
 | Все уровни исчерпаны | ScraperError("ALL_LEVELS_FAILED"), алерт admin |
-| platform.scraper_mode = 'auto', нет токена | Chain: L1 → L2 |
-| platform.scraper_mode = 'auto', есть токен | Chain: L0 → L2 |
+| scraper_mode = 'auto', нет токена в org_platform_credentials | Chain: L1 → L2 |
+| scraper_mode = 'auto', есть токен в org_platform_credentials | Chain: L0 → L2 |
 | network interception поймал HTML вместо JSON | Переключение на DOM-парсинг |
+| org_b запрашивает WB, org_a имеет токен | org_b НЕ получает токен org_a; chain = L1→L2 |
+| L0 ошибка 5 раз подряд для платформы | Circuit breaker: L0 отключается на 1 час |
 
 ---
 

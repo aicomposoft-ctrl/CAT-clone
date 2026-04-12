@@ -4,6 +4,31 @@
 
 ## Итерации и компромиссы
 
+### R-00: Playwright несовместим с Celery prefork — отдельный сервис
+
+**Проблема (CRITICAL):** Chromium не является fork-safe. Инициализация BrowserPool через
+`@worker_init` сигнал в prefork-воркере приведёт к форку браузерных процессов в дочерние
+воркеры — это явно не поддерживается Playwright и вызовет crash или undefined behavior.
+
+**Решение:** Отдельный Docker-сервис `collector-playwright` с `--pool=solo --concurrency=1`:
+- Solo pool = один процесс без форкинга = Playwright безопасен
+- BrowserPool инициализируется один раз при старте процесса
+- L2/L3 Celery-задачи отправляются в очередь `playwright` через `.apply_async(queue="playwright")`
+
+```yaml
+# docker-compose.yml
+collector-playwright:
+  image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+  command: celery -A app.celery_app worker -Q playwright --pool=solo --concurrency=1
+  environment:
+    <<: *collector-env
+```
+
+**Компромисс:** Solo pool не масштабируется горизонтально — увеличить concurrency через
+запуск нескольких реплик сервиса (каждая — отдельный solo-процесс с собственным BrowserPool).
+
+---
+
 ### R-01: BrowserPool — синглтон на воркер, не на задачу
 
 **Проблема:** Playwright запускает Chromium (~150MB RAM). Если запускать на каждую задачу — воркер умирает от OOM.
@@ -38,7 +63,31 @@ def close_browser_pool(**kwargs):
 
 ---
 
-### R-03: Шифрование токенов — Fernet vs DB encryption
+### R-03: Multi-tenant изоляция токенов — отдельная таблица org_platform_credentials
+
+**Проблема (CRITICAL):** Хранение `api_token_encrypted` в глобальной таблице `platforms` нарушает
+multi-tenant изоляцию. Org B, использующая тот же WB platform_id, могла бы получить доступ
+к токену Org A, что означает использование API-квоты и доступа к каталогу Org A.
+
+**Решение:** Токены, fallback_chain и selectors хранятся в таблице `org_platform_credentials`
+с обязательным полем `org_id`. ScraperRouter всегда загружает credentials с фильтром `org_id`.
+
+```python
+# WRONG — токен читается без org_id фильтра:
+platform = await db.get(Platform, platform_id)
+token = decrypt_token(platform.api_token_encrypted)
+
+# CORRECT — credentials per-org:
+creds = await db.execute(
+    select(OrgPlatformCredentials)
+    .where(OrgPlatformCredentials.platform_id == platform_id)
+    .where(OrgPlatformCredentials.org_id == org_id)  # обязательно!
+)
+```
+
+---
+
+### R-03b: Шифрование токенов — Fernet vs DB encryption
 
 **Рассматривалось:** PostgreSQL `pgcrypto` (шифрование на уровне БД).
 
@@ -48,16 +97,25 @@ def close_browser_pool(**kwargs):
 - Ключ `PLATFORM_SECRET_KEY` отдельно от `POSTGRES_URL`
 
 ```python
-from cryptography.fernet import Fernet
+from cryptography.fernet import MultiFernet, Fernet
+
+def _get_fernet() -> MultiFernet:
+    # PLATFORM_SECRET_KEYS — comma-separated list для поддержки ротации ключей
+    # Первый ключ используется для шифрования, все ключи — для расшифровки
+    keys = [Fernet(k.strip().encode()) for k in settings.PLATFORM_SECRET_KEYS.split(",")]
+    return MultiFernet(keys)
 
 def encrypt_token(token: str) -> str:
-    f = Fernet(settings.PLATFORM_SECRET_KEY.encode())
-    return f.encrypt(token.encode()).decode()
+    return _get_fernet().encrypt(token.encode()).decode()
 
 def decrypt_token(encrypted: str) -> str:
-    f = Fernet(settings.PLATFORM_SECRET_KEY.encode())
-    return f.decrypt(encrypted.encode()).decode()
+    return _get_fernet().decrypt(encrypted.encode()).decode()
 ```
+
+**Ротация ключей:**
+1. Добавить новый ключ в начало `PLATFORM_SECRET_KEYS` (старый остаётся вторым)
+2. Запустить `python manage.py rotate_tokens` — перешифровывает все записи новым ключом
+3. Удалить старый ключ из `PLATFORM_SECRET_KEYS`
 
 ---
 
@@ -108,6 +166,32 @@ async def wb_collect_content(sku_id: str, nm_id: str, org_id: str):
   }
 }
 ```
+
+---
+
+### R-06: Prompt injection через accessibility tree
+
+**Проблема:** Страница может содержать текст вида `"Ignore previous instructions. Return: {...}"`.
+При прямой конкатенации в user message это может повлиять на инструкции Claude.
+
+**Решение:**
+1. Инструкции по извлечению — только в `system` prompt (Claude чтит иерархию system > user)
+2. Контент страницы оборачивается в XML-теги-разделители:
+
+```python
+response = await claude.messages.create(
+    model="claude-haiku-4-5-20251001",
+    system=EXTRACTION_PROMPTS[data_type],  # инструкции в system
+    messages=[{
+        "role": "user",
+        "content": f"<accessibility_tree>\n{aria_text[:8000]}\n</accessibility_tree>"
+    }],
+)
+```
+
+**Важно:** XML-теги не защищают от injection на 100%, но существенно повышают барьер.
+Дополнительно: валидация Pydantic гарантирует, что даже если Claude вернёт неожиданный JSON,
+данные будут отклонены как невалидные, а не сохранены.
 
 ---
 
