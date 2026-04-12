@@ -6,6 +6,12 @@ Every scraper must:
   - Set `rate_limit` (requests per second).
   - Implement the four abstract collect_* methods.
   - Use `_get()` for all HTTP requests — handles rate limiting, proxy, and retry.
+
+New in Sprint A:
+  - `scraper_level` class attribute (0=seller API, 1=L1 scraper, 2=L2, 3=L3)
+  - `DataType` enum for use with unified `collect()` method
+  - `ScrapedData` union type returned by `collect()`
+  - `collect()` abstract method — unified entry point for ScraperRouter
 """
 
 from __future__ import annotations
@@ -16,7 +22,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from enum import Enum
+from typing import Optional, Union
 
 import httpx
 
@@ -65,6 +72,18 @@ class ReviewData:
     review_date: date
 
 
+# Union type for all possible return values from collect()
+ScrapedData = Union[ContentData, PriceData, StockData, list[ReviewData]]
+
+
+class DataType(Enum):
+    """Selects which data to collect in the unified collect() interface."""
+    CONTENT = "content"
+    PRICE = "price"
+    STOCK = "stock"
+    REVIEWS = "reviews"
+
+
 class ScraperError(Exception):
     """Domain error raised by scrapers with a machine-readable code."""
 
@@ -81,6 +100,7 @@ class ScraperError(Exception):
 class BaseScraper(ABC):
     platform: str
     rate_limit: float  # requests per second
+    scraper_level: int = 1  # 0=seller API, 1=L1, 2=L2, 3=L3
 
     def __init__(self, proxy_rotator: ProxyRotator) -> None:
         self._proxy = proxy_rotator
@@ -143,3 +163,13 @@ class BaseScraper(ABC):
 
     @abstractmethod
     async def collect_reviews(self, nm_id: str, take: int = 50) -> list[ReviewData]: ...
+
+    @abstractmethod
+    def collect(self, sku_id: str, data_type: DataType) -> ScrapedData:
+        """
+        Unified synchronous entry point used by ScraperRouter.
+
+        Implementations dispatch to the appropriate collect_* method.
+        Must be synchronous — called from Celery tasks which use sync sessions.
+        """
+        ...

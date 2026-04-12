@@ -33,7 +33,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -132,3 +132,37 @@ class Review(Base):
     rating: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
     review_date: Mapped[date] = mapped_column(Date(), nullable=False)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class OrgPlatformCredentials(Base):
+    """
+    Per-organisation credentials for a specific platform.
+
+    Stores encrypted API tokens and scraper fallback configuration.
+    Always filtered by org_id — never queried globally.
+    """
+
+    __tablename__ = "org_platform_credentials"
+    __table_args__ = (
+        UniqueConstraint("org_id", "platform_id", name="uq_org_platform_creds"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    platform_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("platforms.id", ondelete="CASCADE"), nullable=False
+    )
+    # Fernet-encrypted token value; None means no API token available
+    api_token_encrypted: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
+    # Identifies which L0 scraper class handles this token type (e.g. "wb_seller")
+    api_token_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Optional override of the default fallback chain, e.g. ["l0", "l1", "l2"]
+    fallback_chain: Mapped[Optional[dict]] = mapped_column(JSON(), nullable=True)
+    # Optional per-org CSS/XPath selector overrides for L1 scrapers
+    selectors: Mapped[Optional[dict]] = mapped_column(JSON(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
