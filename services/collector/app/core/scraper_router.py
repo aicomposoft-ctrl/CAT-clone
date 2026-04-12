@@ -61,6 +61,11 @@ def _register_l0_scrapers() -> None:
         L0_REGISTRY["wb_seller"] = WBSellerAPIScraper
     except ImportError:
         logger.warning("WBSellerAPIScraper not available — l0 disabled for Wildberries")
+    try:
+        from app.scrapers.seller_api.ozon_seller import OzonSellerAPIScraper
+        L0_REGISTRY["ozon_seller"] = OzonSellerAPIScraper
+    except ImportError:
+        logger.warning("OzonSellerAPIScraper not available — l0 disabled for Ozon")
 
 
 class ScraperRouter:
@@ -251,7 +256,21 @@ class ScraperRouter:
                 )
                 return None
 
-        # l2 (browser automation) and l3 (CAPTCHA solver) — Sprint B/C
+        if level == "l2":
+            from app.scrapers.playwright_scraper import PlaywrightScraper
+            from app.core.browser_pool import get_browser_pool
+            selectors = creds.selectors if creds and hasattr(creds, "selectors") else {}
+            try:
+                pool = get_browser_pool()
+            except RuntimeError:
+                logger.warning(
+                    "ScraperRouter: BrowserPool not available — l2 disabled "
+                    "(not running in collector-playwright worker?)"
+                )
+                return None
+            return PlaywrightScraper(platform, selectors or {}, pool)
+
+        # l3 (CAPTCHA solver) — Sprint C
         logger.debug("ScraperRouter: level %s not yet implemented", level)
         return None
 
@@ -273,9 +292,20 @@ class ScraperRouter:
 
     @staticmethod
     async def _invoke_async(
-        scraper: BaseScraper, sku_id: str, data_type: DataType
+        scraper, sku_id: str, data_type: DataType
     ) -> ScrapedData:
-        """Dispatch to the appropriate async collect_* method for L1 scrapers."""
+        """
+        Dispatch to the appropriate async collect method.
+
+        L1 scrapers: calls collect_content/price/stock/reviews(nm_id).
+        L2 scrapers (PlaywrightScraper): calls collect(url, data_type) where
+            sku_id is expected to carry the full platform URL for L2 requests.
+        """
+        # L2: unified collect(url, data_type) interface
+        if getattr(scraper, "scraper_level", 1) == 2:
+            return await scraper.collect(sku_id, data_type)
+
+        # L1: legacy per-type methods
         if data_type == DataType.CONTENT:
             return await scraper.collect_content(sku_id)
         if data_type == DataType.PRICE:
