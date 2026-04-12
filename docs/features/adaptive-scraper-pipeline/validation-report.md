@@ -1,6 +1,32 @@
 # Validation Report — Adaptive Scraper Pipeline
 
 **Date:** 2026-04-12
+**Iteration:** 2 (final)
+
+---
+
+## Iteration 2 Summary — ALL PASS
+
+| Agent | Dimension | Score | Status |
+|-------|-----------|-------|--------|
+| 1 | User Story Completeness (INVEST) | 80/100 avg | PASS |
+| 2 | BDD Scenario Coverage | 72/100 | PASS ↑ (was BLOCKED 42) |
+| 3 | Acceptance Criteria Clarity | 82/100 | PASS |
+| 4 | Technical Feasibility | 79/100 | PASS ↑ (was BLOCKED 58) |
+| 5 | Security Design | 71/100 | PASS ↑ (design CRITICALs fixed in SPARC) |
+
+**Gate: PASSED.** All dimensions ≥ 70. Zero BLOCKED items. Proceed to Phase 3.
+
+### Pre-implementation WARNs (fix during Sprint B before coding PlaywrightScraper):
+- **WARN-1 (Medium):** `PlaywrightScraper` constructor mismatch — Architecture shows `(platform, browser_pool)` but Pseudocode shows `(platform, selectors)`. Fix: `PlaywrightScraper(platform, selectors, browser_pool)`.
+- **WARN-2 (Low):** `AgentScraper` opens its own `PlaywrightContext()` bypassing BrowserPool — acceptable for prototype, consolidate in Sprint C.
+- **BDD gap (Moderate):** Multi-tenant credential isolation needs an executable Gherkin scenario (not just a prose bullet).
+
+---
+
+## Iteration 1 — Original Findings
+
+**Date:** 2026-04-12
 **Iteration:** 1 (pre-fix)
 
 ---
