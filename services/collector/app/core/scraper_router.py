@@ -114,14 +114,21 @@ class ScraperRouter:
         last_error: Optional[ScraperError] = None
 
         for level in chain:
-            scraper = self._instantiate(level, platform, creds)
+            scraper = self._instantiate(level, platform, creds, org_id)
             if scraper is None:
                 logger.debug("ScraperRouter: level %s not available — skipping", level)
                 continue
 
             try:
                 result = self._invoke(scraper, sku_id, data_type)
-                # Tag the result with the level that succeeded (informational)
+                # Tag the result with the scraper level that succeeded so tasks
+                # can persist this provenance field to the DB (migration 0014).
+                level_int = scraper.scraper_level
+                try:
+                    result.scraper_level = level_int
+                except AttributeError:
+                    # list[ReviewData] — set on list itself (non-standard but safe)
+                    result = type("_Tagged", (list,), {"scraper_level": level_int})(result)
                 logger.info(
                     "ScraperRouter: collected %s for sku=%s via %s (level=%s)",
                     data_type.value,
@@ -220,6 +227,7 @@ class ScraperRouter:
         level: str,
         platform: Platform,
         creds: Optional[OrgPlatformCredentials],
+        org_id: Optional[UUID] = None,
     ) -> Optional[BaseScraper]:
         """
         Instantiate the scraper for a given level.
@@ -270,7 +278,21 @@ class ScraperRouter:
                 return None
             return PlaywrightScraper(platform, selectors or {}, pool)
 
-        # l3 (CAPTCHA solver) — Sprint C
+        if level == "l3":
+            from app.scrapers.agent_scraper import AgentScraper
+            from app.core.browser_pool import get_browser_pool
+            if self._redis is None:
+                logger.warning("ScraperRouter: no Redis client — l3 disabled")
+                return None
+            try:
+                pool = get_browser_pool()
+            except RuntimeError:
+                logger.warning(
+                    "ScraperRouter: BrowserPool not available — l3 disabled"
+                )
+                return None
+            return AgentScraper(platform, org_id, self._redis, pool)
+
         logger.debug("ScraperRouter: level %s not yet implemented", level)
         return None
 
@@ -301,8 +323,8 @@ class ScraperRouter:
         L2 scrapers (PlaywrightScraper): calls collect(url, data_type) where
             sku_id is expected to carry the full platform URL for L2 requests.
         """
-        # L2: unified collect(url, data_type) interface
-        if getattr(scraper, "scraper_level", 1) == 2:
+        # L2 and L3: unified collect(url, data_type) interface
+        if getattr(scraper, "scraper_level", 1) in (2, 3):
             return await scraper.collect(sku_id, data_type)
 
         # L1: legacy per-type methods

@@ -100,6 +100,9 @@ class ContentScore(Base):
     description_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
     composition_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
     content_total: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    # Provenance: which collection tier produced this row (0=API, 1=L1, 2=L2 browser)
+    # NULL = legacy rows or unknown. Added in migration 0014.
+    scraper_level: Mapped[Optional[int]] = mapped_column(SmallInteger(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -114,6 +117,9 @@ class PriceSnapshot(Base):
     original_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     discount_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
     promo_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Provenance: which collection tier produced this row (0=API, 1=L1, 2=L2 browser)
+    # NULL = legacy rows or unknown. Added in migration 0014.
+    scraper_level: Mapped[Optional[int]] = mapped_column(SmallInteger(), nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
