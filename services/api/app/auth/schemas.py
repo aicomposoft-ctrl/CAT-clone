@@ -13,9 +13,23 @@ Design rules (Refinement.md § 2, Pseudocode.md § 1):
 """
 
 import uuid
-from typing import Optional
+from typing import Annotated, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic.functional_validators import AfterValidator
+
+
+def _normalise_email(v: str) -> str:
+    """Lowercase and strip whitespace — email is case-insensitive by spec."""
+    return v.strip().lower()
+
+
+# LoginEmail accepts any syntactically valid email without TLD deliverability
+# checks. Seeds and dev users may have .local or .demo domains that are valid
+# internally but rejected by the stricter EmailStr (email-validator library).
+# Registration still uses EmailStr (full validation) — login only needs the
+# value to exist in the DB.
+LoginEmail = Annotated[str, Field(min_length=3, max_length=255), AfterValidator(_normalise_email)]
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +68,7 @@ class LoginRequest(BaseModel):
     edge case 1: email case normalisation).
     """
 
-    email: EmailStr = Field(
+    email: LoginEmail = Field(
         description="User email address. Case-insensitive — normalised to lowercase.",
     )
     password: str = Field(
