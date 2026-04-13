@@ -15,11 +15,18 @@ Key generation:
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 
 from cryptography.fernet import Fernet, MultiFernet
 
 
+@lru_cache(maxsize=1)
 def _get_fernet() -> MultiFernet:
+    """
+    Build and cache a MultiFernet instance from PLATFORM_SECRET_KEYS.
+    Cached at module level — parsing env var and constructing Fernet objects
+    once per process instead of per encrypt/decrypt call.
+    """
     keys_str = os.environ.get("PLATFORM_SECRET_KEYS", "")
     if not keys_str:
         raise RuntimeError(

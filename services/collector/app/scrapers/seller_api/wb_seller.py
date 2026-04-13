@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -71,6 +72,10 @@ class WBSellerAPIScraper(BaseScraper):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+        # Reuse a single httpx.Client for connection pooling (TLS handshake once)
+        self._client = httpx.Client(timeout=30.0)
+        self._min_interval = 1.0 / self.rate_limit  # seconds between requests
+        self._last_request_at: float = 0.0
 
     # ── Unified synchronous collect() — primary interface ─────────────────
 
@@ -85,6 +90,12 @@ class WBSellerAPIScraper(BaseScraper):
             ScraperError("NOT_FOUND")      — product not in API response
             ScraperError("PARSE_ERROR")    — unexpected response structure
         """
+        # Validate nm_id is numeric once before dispatching
+        try:
+            int(sku_id)
+        except (ValueError, TypeError):
+            raise ScraperError("PARSE_ERROR", f"WB nm_id must be numeric, got: {sku_id!r}")
+
         if data_type == DataType.CONTENT:
             return self._collect_content(sku_id)
         if data_type == DataType.PRICE:
@@ -109,16 +120,22 @@ class WBSellerAPIScraper(BaseScraper):
         json: Optional[dict] = None,
         params: Optional[dict] = None,
     ) -> dict:
-        """Execute a synchronous HTTP request with common error handling."""
+        """Execute a synchronous HTTP request with rate limiting and common error handling."""
+        # Enforce rate_limit (requests per second) without ProxyRotator semaphore
+        elapsed = time.monotonic() - self._last_request_at
+        wait = self._min_interval - elapsed
+        if wait > 0:
+            time.sleep(wait)
+        self._last_request_at = time.monotonic()
+
         try:
-            with httpx.Client(timeout=30.0) as client:
-                resp = client.request(
-                    method,
-                    url,
-                    headers=self._headers,
-                    json=json,
-                    params=params,
-                )
+            resp = self._client.request(
+                method,
+                url,
+                headers=self._headers,
+                json=json,
+                params=params,
+            )
         except (httpx.TransportError, httpx.TimeoutException) as exc:
             raise ScraperError("API_UNAVAILABLE", _redact(str(exc))) from exc
 
@@ -229,20 +246,19 @@ class WBSellerAPIScraper(BaseScraper):
         GET /api/v1/supplier/stocks?dateFrom=<today>&nmId=<nm_id>
         Response: [{"nmId": ..., "quantity": ..., "inWayToClient": ..., ...}]
         """
-        today = date.today().isoformat()
-        data = self._request("GET", self._STOCKS, params={"dateFrom": today})
-
-        # Response is a flat list; filter to the requested nmId
         try:
             nm = int(nm_id)
         except ValueError as exc:
             raise ScraperError("PARSE_ERROR", f"nm_id is not numeric: {nm_id!r}") from exc
 
+        today = date.today().isoformat()
+        # Pass nmId as filter to avoid fetching the entire supplier catalog
+        data = self._request("GET", self._STOCKS, params={"dateFrom": today, "nmId": nm})
+
         total_qty = 0
         if isinstance(data, list):
             for entry in data:
-                if entry.get("nmId") == nm:
-                    total_qty += int(entry.get("quantity") or 0)
+                total_qty += int(entry.get("quantity") or 0)
         else:
             logger.warning(
                 "WBSellerAPIScraper._collect_stock: unexpected response type %s", type(data)

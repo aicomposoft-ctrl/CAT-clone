@@ -10,12 +10,40 @@ to avoid blocking HTTP calls inside task bodies.
 
 from __future__ import annotations
 
+import logging
 import os
+import sys
 
 from celery import Celery
 from celery.signals import worker_process_init
 
+logger = logging.getLogger(__name__)
+
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+
+# Fail fast if secrets required for L0 scraping are missing.
+# PLATFORM_SECRET_KEYS is only mandatory when encrypted tokens exist in DB,
+# but we validate early so misconfiguration is caught at startup, not mid-task.
+_REQUIRED_SECRETS = ["POSTGRES_URL", "REDIS_URL"]
+_OPTIONAL_SECRETS_WITH_FEATURES = {
+    "PLATFORM_SECRET_KEYS": "L0 Seller API token encryption",
+    "ANTHROPIC_API_KEY": "L3 AgentScraper Claude API",
+}
+
+
+def _validate_secrets() -> None:
+    missing = [k for k in _REQUIRED_SECRETS if not os.environ.get(k)]
+    if missing:
+        logger.critical("Collector startup: missing required secrets: %s", missing)
+        sys.exit(1)
+    for key, feature in _OPTIONAL_SECRETS_WITH_FEATURES.items():
+        if not os.environ.get(key):
+            logger.warning(
+                "Collector startup: %s not set — %s will be unavailable", key, feature
+            )
+
+
+_validate_secrets()
 
 celery_app = Celery(
     "cat_collector",

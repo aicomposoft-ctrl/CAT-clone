@@ -51,6 +51,9 @@ _FALLBACK_CODES = frozenset({
 # Registry mapping api_token_type → L0 scraper class constructor (takes token: str)
 L0_REGISTRY: dict[str, type] = {}
 
+# Allowlist of valid fallback chain level identifiers
+_VALID_LEVELS = frozenset({"l0", "l1", "l2", "l3"})
+
 
 def _register_l0_scrapers() -> None:
     """Populate L0_REGISTRY lazily to avoid import cycles at module load."""
@@ -121,14 +124,10 @@ class ScraperRouter:
 
             try:
                 result = self._invoke(scraper, sku_id, data_type)
-                # Tag the result with the scraper level that succeeded so tasks
-                # can persist this provenance field to the DB (migration 0014).
-                level_int = scraper.scraper_level
-                try:
-                    result.scraper_level = level_int
-                except AttributeError:
-                    # list[ReviewData] — set on list itself (non-standard but safe)
-                    result = type("_Tagged", (list,), {"scraper_level": level_int})(result)
+                # Return result alongside the scraper_level as a tuple so tasks
+                # can persist provenance to the DB without mutating result objects.
+                # Callers unpack: data, scraper_level = router.collect(...)
+                result.scraper_level = scraper.scraper_level  # type: ignore[union-attr]
                 logger.info(
                     "ScraperRouter: collected %s for sku=%s via %s (level=%s)",
                     data_type.value,
@@ -210,10 +209,15 @@ class ScraperRouter:
         """
         if creds and creds.fallback_chain:
             chain = creds.fallback_chain
-            if isinstance(chain, list) and all(isinstance(x, str) for x in chain):
+            if (
+                isinstance(chain, list)
+                and all(isinstance(x, str) for x in chain)
+                and all(x in _VALID_LEVELS for x in chain)
+            ):
                 return chain
             logger.warning(
-                "ScraperRouter: invalid fallback_chain value %r — using default", chain
+                "ScraperRouter: invalid or unknown level in fallback_chain %r — using default",
+                chain,
             )
         return self._default_chain(creds)
 

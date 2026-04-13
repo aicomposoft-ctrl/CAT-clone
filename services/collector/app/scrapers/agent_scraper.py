@@ -169,8 +169,9 @@ class AgentScraper:
         cache_key = f"agent_result:{self._platform_id}:{url_hash}:{data_type.value}"
         cached = self._redis.get(cache_key)
         if cached is not None:
+            # Log url_hash not the full URL — URLs can contain signed params or session tokens
             logger.debug(
-                "AgentScraper: cache hit for %s data_type=%s", url, data_type.value
+                "AgentScraper: cache hit url_hash=%s data_type=%s", url_hash, data_type.value
             )
             return self._deserialize(cached, data_type)
 
@@ -218,15 +219,17 @@ class AgentScraper:
         """
         Enforce per-org daily L3 request limit via Redis counter.
 
-        Increments the counter before the call. Raises ScraperError if the
-        new count exceeds the daily limit.
+        Uses a pipeline to make INCR + EXPIRE atomic — if the process dies
+        between two separate calls the key would have no TTL and leak forever.
         """
         today = date.today().isoformat()
         key = f"l3_rate:{self._org_id}:{today}"
-        count = self._redis.incr(key)
-        # Set TTL on first increment (key expires at midnight + buffer)
-        if count == 1:
-            self._redis.expire(key, 86_400)  # 24 hours
+
+        pipe = self._redis.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, 86_400)  # always refresh TTL — harmless if already set
+        count, _ = pipe.execute()
+
         if count > _DAILY_LIMIT:
             raise ScraperError(
                 "RATE_LIMITED",
@@ -241,6 +244,9 @@ class AgentScraper:
 
         Uses BrowserPool to acquire a page context. The ARIA snapshot is truncated
         to _ARIA_MAX_CHARS to keep Claude API costs predictable.
+
+        URL is never logged — it may contain signed query parameters or session tokens.
+        Error messages use the platform name and scraper level instead.
         """
         async with self._pool.acquire() as page:
             try:
@@ -248,14 +254,14 @@ class AgentScraper:
             except Exception as exc:
                 raise ScraperError(
                     "API_UNAVAILABLE",
-                    f"AgentScraper: page load failed for {url}: {exc}",
+                    f"AgentScraper (L3/{self._platform_name}): page load failed: {exc}",
                 ) from exc
 
             # Anti-bot heuristic
             if await self._is_blocked(page):
                 raise ScraperError(
                     "ANTIBOT_BLOCK",
-                    f"AgentScraper: anti-bot page detected at {url}",
+                    f"AgentScraper (L3/{self._platform_name}): anti-bot page detected",
                 )
 
             try:
@@ -263,7 +269,7 @@ class AgentScraper:
             except Exception as exc:
                 raise ScraperError(
                     "API_UNAVAILABLE",
-                    f"AgentScraper: aria_snapshot() failed for {url}: {exc}",
+                    f"AgentScraper (L3/{self._platform_name}): aria_snapshot() failed: {exc}",
                 ) from exc
 
         return aria_text[:_ARIA_MAX_CHARS]
@@ -292,9 +298,11 @@ class AgentScraper:
                 f"AgentScraper: no system prompt for data_type={data_type.value}",
             )
 
-        user_message = (
-            f"<accessibility_tree>\n{aria_text}\n</accessibility_tree>"
-        )
+        # Sanitize ARIA text: replace < > to prevent XML tag injection that could
+        # break out of the <accessibility_tree> delimiter in the user message.
+        # Fullwidth equivalents preserve readability for Claude.
+        sanitized = aria_text.replace("<", "\uff1c").replace(">", "\uff1e")
+        user_message = f"<accessibility_tree>\n{sanitized}\n</accessibility_tree>"
 
         try:
             response = await self._claude.messages.create(
@@ -316,10 +324,11 @@ class AgentScraper:
                 "AgentScraper: Claude returned an empty response",
             )
 
+        # Log only data_type and length — never log response content (may contain scraped PII)
         logger.debug(
-            "AgentScraper: Claude response for data_type=%s: %s",
+            "AgentScraper: Claude responded for data_type=%s len=%d",
             data_type.value,
-            raw[:200],
+            len(raw),
         )
         return raw
 
