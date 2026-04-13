@@ -80,6 +80,10 @@ class SKUResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    # Reference fields — needed by the frontend to pre-populate the reference drawer
+    reference_description: Optional[str] = None
+    reference_composition: Optional[str] = None
+    reference_image_url: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

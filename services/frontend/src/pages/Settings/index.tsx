@@ -205,8 +205,14 @@ function ReferenceDrawer({ sku, onClose }: { sku: SKU | null; onClose: () => voi
   const [textForm] = Form.useForm()
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
-  // Reset preview when switching to a different SKU
-  useEffect(() => { setPreviewUrl(null) }, [sku?.id])
+  // Reset preview and populate form with saved reference text when SKU changes
+  useEffect(() => {
+    setPreviewUrl(null)
+    textForm.setFieldsValue({
+      reference_description: sku?.reference_description ?? '',
+      reference_composition: sku?.reference_composition ?? '',
+    })
+  }, [sku?.id])
 
   const { data: imgData, isLoading: imgLoading } = useQuery({
     queryKey: ['reference-image', sku?.id],

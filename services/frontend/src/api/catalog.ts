@@ -21,6 +21,9 @@ export interface SKU {
   is_active: boolean
   created_at: string
   updated_at: string
+  reference_description: string | null
+  reference_composition: string | null
+  reference_image_url: string | null
 }
 
 export interface Platform {
