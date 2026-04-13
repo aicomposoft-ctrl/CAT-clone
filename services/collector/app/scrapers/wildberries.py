@@ -53,8 +53,16 @@ class WildberriesScraper(BaseScraper):
     platform = "Wildberries"
     rate_limit = 1.0  # req/sec
 
-    _CARD_API = "https://card.wb.ru/cards/v2/detail"
-    _REVIEWS_API = "https://feedbacks2.wb.ru/feedbacks/v1/{nm_id}"
+    # WB migrated *.wb.ru → *.wildberries.ru in April 2025. Try legacy first
+    # (still resolves for many clients); fall back to new domain on connection failure.
+    _CARD_APIS = [
+        "https://card.wb.ru/cards/v2/detail",
+        "https://card.wildberries.ru/cards/v2/detail",
+    ]
+    _REVIEWS_API_TMPLS = [
+        "https://feedbacks2.wb.ru/feedbacks/v1/{nm_id}",
+        "https://feedbacks2.wildberries.ru/feedbacks/v1/{nm_id}",
+    ]
 
     def __init__(self, proxy_rotator: Optional[ProxyRotator] = None) -> None:
         from app.core.proxy import get_proxy_rotator
@@ -113,17 +121,32 @@ class WildberriesScraper(BaseScraper):
         return StockData(in_stock=total_qty > 0, total_qty=total_qty)
 
     async def collect_reviews(self, nm_id: str, take: int = 50) -> list[ReviewData]:
-        url = self._REVIEWS_API.format(nm_id=nm_id)
+        data: dict | None = None
+        last_exc: Optional[ScraperError] = None
 
-        async def _fetch():
-            resp = await self._get(url, params={"take": take, "skip": 0, "order": "dateDesc"})
-            resp.raise_for_status()
-            return resp.json()
+        for tmpl in self._REVIEWS_API_TMPLS:
+            url = tmpl.format(nm_id=nm_id)
 
-        try:
-            data = await self.with_retry(_fetch)
-        except ScraperError:
-            raise
+            async def _fetch(u=url):
+                resp = await self._get(u, params={"take": take, "skip": 0, "order": "dateDesc"})
+                resp.raise_for_status()
+                return resp.json()
+
+            try:
+                data = await self.with_retry(_fetch)
+                break
+            except ScraperError as exc:
+                if exc.code == "RATE_LIMITED":
+                    raise  # rate limit is global, not domain-specific
+                last_exc = exc
+                logger.debug("WB reviews %s → %s, trying next domain", url, exc.code)
+                continue
+
+        if data is None:
+            raise ScraperError(
+                "API_UNAVAILABLE",
+                f"WB reviews API unreachable for nm_id={nm_id}: {last_exc}",
+            ) from last_exc
 
         feedbacks = data.get("feedbacks") or []
         reviews: list[ReviewData] = []
@@ -155,31 +178,49 @@ class WildberriesScraper(BaseScraper):
     # ── Private helpers ────────────────────────────────────────────────────
 
     async def _fetch_product(self, nm_id: str) -> dict:
-        """Fetch product data from WB card API. Raises ScraperError on failure."""
-        async def _fetch():
-            resp = await self._get(
-                self._CARD_API,
-                params={"appType": "1", "curr": "rub", "dest": "-1257786", "nm": nm_id},
-            )
-            resp.raise_for_status()
-            return resp.json()
+        """
+        Fetch product data from WB card API, trying each domain in _CARD_APIS.
 
-        try:
-            data = await self.with_retry(_fetch)
-        except ScraperError:
-            raise
-        except Exception as exc:
-            raise ScraperError("API_UNAVAILABLE", str(exc)) from exc
+        Tries legacy wb.ru first (still resolves for most clients as of early 2025),
+        then falls back to wildberries.ru if the connection fails.
+        NOT_FOUND and RATE_LIMITED are raised immediately without domain fallback.
+        """
+        params = {"appType": "1", "curr": "rub", "dest": "-1257786", "nm": nm_id}
+        last_exc: Optional[ScraperError] = None
 
-        try:
-            products = data.get("data", {}).get("products", [])
-        except AttributeError as exc:
-            raise ScraperError("PARSE_ERROR", f"Unexpected response structure: {exc}") from exc
+        for api_url in self._CARD_APIS:
+            async def _fetch(url=api_url):
+                resp = await self._get(url, params=params)
+                if resp.status_code == 404:
+                    raise ScraperError("NOT_FOUND", f"nm_id={nm_id} not found on WB")
+                resp.raise_for_status()
+                return resp.json()
 
-        if not products:
-            raise ScraperError("NOT_FOUND", f"No products found for nm_id={nm_id}")
+            try:
+                data = await self.with_retry(_fetch)
+            except ScraperError as exc:
+                if exc.code in ("NOT_FOUND", "RATE_LIMITED"):
+                    raise  # definitive result — no point trying other domains
+                last_exc = exc
+                logger.debug(
+                    "WBScraper: %s → %s — trying next domain", api_url, exc.code
+                )
+                continue
 
-        return products[0]
+            try:
+                products = data.get("data", {}).get("products", [])
+            except AttributeError as exc:
+                raise ScraperError("PARSE_ERROR", f"Unexpected response structure: {exc}") from exc
+
+            if not products:
+                raise ScraperError("NOT_FOUND", f"No products found for nm_id={nm_id}")
+
+            return products[0]
+
+        raise ScraperError(
+            "API_UNAVAILABLE",
+            f"WB card API: all domains unreachable for nm_id={nm_id}. Last: {last_exc}",
+        ) from last_exc
 
 
 # ---------------------------------------------------------------------------

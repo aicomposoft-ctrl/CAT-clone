@@ -47,6 +47,12 @@ class Platform(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Added in migration 0014. Controls which scraper levels ScraperRouter attempts:
+    #   'auto'       → try all levels in order (default)
+    #   'playwright' → start at L2 (skip L1 httpx — known to fail on this platform)
+    #   'agent'      → L3 only (Claude extraction)
+    #   'api'        → L0/L1 only, no browser
+    scraper_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
 
 
 class SKU(Base):

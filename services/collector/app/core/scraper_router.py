@@ -112,7 +112,7 @@ class ScraperRouter:
         """
         platform = self._load_platform(platform_id)
         creds = self._load_creds(platform_id, org_id)
-        chain = self._build_chain(creds)
+        chain = self._build_chain(creds, platform)
 
         last_error: Optional[ScraperError] = None
 
@@ -199,13 +199,17 @@ class ScraperRouter:
         result = self._db.execute(stmt).scalar_one_or_none()
         return result
 
-    def _build_chain(self, creds: Optional[OrgPlatformCredentials]) -> list[str]:
+    def _build_chain(
+        self,
+        creds: Optional[OrgPlatformCredentials],
+        platform: "Platform",
+    ) -> list[str]:
         """
         Return the fallback chain for this org/platform combination.
 
         Priority:
-          1. Explicit override in creds.fallback_chain (stored as JSON list of strings)
-          2. Default chain based on whether an API token is available
+          1. Explicit per-org override in creds.fallback_chain
+          2. Platform-level default derived from platform.scraper_mode
         """
         if creds and creds.fallback_chain:
             chain = creds.fallback_chain
@@ -219,12 +223,42 @@ class ScraperRouter:
                 "ScraperRouter: invalid or unknown level in fallback_chain %r — using default",
                 chain,
             )
-        return self._default_chain(creds)
+        return self._default_chain(creds, platform)
 
-    def _default_chain(self, creds: Optional[OrgPlatformCredentials]) -> list[str]:
-        if creds and creds.api_token_encrypted:
-            return ["l0", "l2"]
-        return ["l1", "l2"]
+    def _default_chain(
+        self,
+        creds: Optional[OrgPlatformCredentials],
+        platform: Optional["Platform"] = None,
+    ) -> list[str]:
+        """
+        Map platform.scraper_mode to a fallback chain.
+
+        Supported modes:
+          'auto'       → all levels; L0 first if token present
+          'playwright' → ["l2", "l3"]  (skip httpx — known to fail on this platform)
+          'browser'    → same as 'playwright' (legacy alias from migration 0014)
+          'agent'      → ["l3"]  (Claude extraction only)
+          'api'        → ["l0", "l1"] / ["l1"] — no browser, API only
+          'scrape'     → ["l1"]  (httpx only, no seller API)
+          'token'      → ["l0"] if token present, else fall through to auto
+          unknown      → treated as 'auto'
+        """
+        mode = (getattr(platform, "scraper_mode", None) or "auto").lower()
+        has_token = bool(creds and creds.api_token_encrypted)
+
+        if mode in ("playwright", "browser"):
+            return ["l2", "l3"]
+        if mode == "agent":
+            return ["l3"]
+        if mode == "scrape":
+            return ["l1"]
+        if mode == "api":
+            return ["l0", "l1"] if has_token else ["l1"]
+        if mode == "token":
+            # token-only: require API token; fall through to auto if missing
+            return ["l0"] if has_token else ["l1", "l2", "l3"]
+        # 'auto' or any unrecognised value: try all levels, L3 as last resort
+        return ["l0", "l1", "l2", "l3"] if has_token else ["l1", "l2", "l3"]
 
     def _instantiate(
         self,
