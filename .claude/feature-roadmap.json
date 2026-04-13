@@ -1,0 +1,65 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-04-13",
+  "sprints": {
+    "sprint-01": {
+      "name": "Auth & Core",
+      "features": ["auth-jwt-rbac", "sku-crud"]
+    },
+    "sprint-02": {
+      "name": "Scraping Foundation",
+      "features": ["wb-scraper", "ozon-scraper", "lenta-scraper", "samocat-scraper"]
+    },
+    "sprint-03": {
+      "name": "ML Scoring",
+      "features": ["content-scoring-image", "content-scoring-text", "reviews-nlp"]
+    },
+    "sprint-04": {
+      "name": "Data Management",
+      "features": ["reference-upload-s3", "stock-plan-upload", "distribution-dashboard"]
+    },
+    "sprint-05": {
+      "name": "Reports & Alerts",
+      "features": ["excel-export-content", "excel-export-stock", "excel-export-reviews", "email-alerts", "alert-config-ui", "price-monitoring"]
+    },
+    "sprint-06": {
+      "name": "Frontend & Public API",
+      "features": ["web-dashboard", "frontend-prices-reviews", "api-public-endpoints"]
+    },
+    "sprint-07": {
+      "name": "Multi-tenancy & Infra",
+      "features": ["multi-client-support", "adaptive-scraper-pipeline"]
+    }
+  },
+  "features": {
+    "auth-jwt-rbac":            { "status": "done", "phase": 4 },
+    "sku-crud":                 { "status": "done", "phase": 4 },
+    "wb-scraper":               { "status": "done", "phase": 4 },
+    "ozon-scraper":             { "status": "done", "phase": 4 },
+    "lenta-scraper":            { "status": "done", "phase": 4 },
+    "samocat-scraper":          { "status": "done", "phase": 4 },
+    "content-scoring-image":    { "status": "done", "phase": 4 },
+    "content-scoring-text":     { "status": "done", "phase": 4 },
+    "reviews-nlp":              { "status": "done", "phase": 4 },
+    "reference-upload-s3":      { "status": "done", "phase": 4 },
+    "stock-plan-upload":        { "status": "done", "phase": 4 },
+    "distribution-dashboard":   { "status": "done", "phase": 4 },
+    "excel-export-content":     { "status": "done", "phase": 4 },
+    "excel-export-stock":       { "status": "done", "phase": 4 },
+    "excel-export-reviews":     { "status": "done", "phase": 4 },
+    "email-alerts":             { "status": "done", "phase": 4 },
+    "alert-config-ui":          { "status": "done", "phase": 4 },
+    "price-monitoring":         { "status": "done", "phase": 4 },
+    "web-dashboard":            { "status": "done", "phase": 4 },
+    "frontend-prices-reviews":  { "status": "done", "phase": 4 },
+    "api-public-endpoints":     { "status": "done", "phase": 4 },
+    "multi-client-support":     { "status": "done", "phase": 4 },
+    "adaptive-scraper-pipeline":{ "status": "done", "phase": 4 }
+  },
+  "summary": {
+    "total": 23,
+    "done": 23,
+    "in_progress": 0,
+    "blocked": 0
+  }
+}
