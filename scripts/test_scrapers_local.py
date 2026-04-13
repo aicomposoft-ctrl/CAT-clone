@@ -3,15 +3,15 @@
 Local scraper smoke-test — 4 platforms, 1 product each, no Docker/DB/Redis required.
 
 Strategy per platform:
-  Wildberries  → L1 httpx  (card.wb.ru public API)
-  Ozon         → L1 httpx  (ozon.ru composer-api.bx)
-  Lenta        → L1 httpx  (lenta.com/api/v1, tries both legacy + new domains)
+  Wildberries  → L1 httpx (card.wb.ru + card.wildberries.ru fallback)
+  Ozon         → L2 Playwright (Akamai bot-protect blocks httpx; browser intercepts XHR)
+  Lenta        → L2 Playwright (401 on httpx; browser session carries auth cookies)
   Самокат      → L2 Playwright (geo-init Moscow → intercept API calls)
 
 Setup:
     cd /workspaces/CAT-clone/services/collector
-    pip install httpx==0.27.0 requests cryptography
-    pip install playwright && playwright install chromium   # for Самокат only
+    pip install httpx==0.27.0 cryptography
+    pip install playwright && playwright install chromium
 
 Run:
     PYTHONPATH=/workspaces/CAT-clone/services/collector \\
@@ -19,9 +19,9 @@ Run:
 
 How to find product IDs / URLs:
   Wildberries:  wildberries.ru/catalog/114805666/detail.aspx  → nm_id = 114805666
-  Ozon:         ozon.ru/product/name-123456789/               → item_id = 123456789
-  Lenta:        lenta.com/catalog/cat/product-name-100012345  → id = 100012345
-  Самокат:      samokat.ru/product/name-12345/                → full URL needed for L2
+  Ozon:         ozon.ru/product/name-123456789/               → full URL for Playwright
+  Lenta:        lenta.com/catalog/cat/product-name-100012345  → full URL for Playwright
+  Самокат:      samokat.ru/product/name-12345/                → full URL for Playwright
 """
 
 import asyncio
@@ -38,8 +38,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "services", "co
 # ─────────────────────────────────────────────────────────────────────────────
 
 WB_NM_ID      = "114805666"          # nm_id из URL карточки WB
-OZON_ITEM_ID  = "1234567890"         # item_id из URL карточки Ozon
-LENTA_ID      = "100012345"          # ID из URL страницы продукта Лента
+                                     # Пример: wildberries.ru/catalog/114805666/detail.aspx
+
+OZON_URL      = "https://www.ozon.ru/product/name-123456789/"
+                                     # Полный URL карточки Ozon (включая слэш в конце)
+
+LENTA_URL     = "https://lenta.com/catalog/cat/product-name-100012345/"
+                                     # Полный URL карточки Ленты
+
 SAMOCAT_URL   = "https://samokat.ru/product/chaj-lipton-yellow-label-25p-50g-12345/"
                                      # Полный URL карточки на Самокате
 
@@ -107,51 +113,155 @@ async def test_wb() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Ozon — L1 httpx
+#  Общий Playwright-помощник для Ozon и Lenta
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
+
+async def _playwright_intercept(
+    platform_name: str,
+    product_url: str,
+    api_url_hint: str,   # подстрока, по которой ищем нужный XHR
+    debug_screenshot: str,
+    geo: dict | None = None,
+) -> None:
+    """
+    Открывает product_url через Playwright, перехватывает JSON-ответы
+    от api_url_hint и печатает найденные поля контента/цены/остатка.
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        print("\n  ⚠️  playwright не установлен. Запусти:")
+        print("      pip install playwright && playwright install chromium")
+        return
+
+    ctx_kwargs: dict = {
+        "viewport": {"width": 1280, "height": 800},
+        "user_agent": _BROWSER_UA,
+        "locale": "ru-RU",
+        "extra_http_headers": {"Accept-Language": "ru-RU,ru;q=0.9"},
+    }
+    if geo:
+        ctx_kwargs["geolocation"] = geo
+        ctx_kwargs["permissions"] = ["geolocation"]
+
+    intercepted: list[dict] = []
+
+    async def _on_resp(response):
+        try:
+            if api_url_hint in response.url and response.status == 200:
+                ct = response.headers.get("content-type", "")
+                if "json" in ct:
+                    body = await response.json()
+                    intercepted.append({"url": response.url, "body": body})
+        except Exception:
+            pass
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage",
+                  "--disable-blink-features=AutomationControlled"],
+        )
+        context = await browser.new_context(**ctx_kwargs)
+        page = await context.new_page()
+        page.on("response", _on_resp)
+
+        print(f"\n  → Загружаем: {product_url}")
+        try:
+            await page.goto(product_url, wait_until="networkidle", timeout=45_000)
+        except Exception as exc:
+            print(f"  ❌ Загрузка страницы: {exc}")
+            await context.close()
+            await browser.close()
+            return
+
+        print(f"  → Заголовок: {(await page.title())!r}")
+        print(f"  → Перехвачено XHR ({api_url_hint}): {len(intercepted)}")
+
+        content_ok = price_ok = stock_ok = False
+        for r in intercepted:
+            body = r["body"]
+            url_short = r["url"][:80]
+            if not content_ok:
+                name = _deep_find(body, ("name", "title", "productName", "header"))
+                if name:
+                    print(f"\n  ✅ [content: {url_short}]")
+                    print(f"     name: {str(name)[:100]}")
+                    desc = _deep_find(body, ("description", "desc", "shortDescription"))
+                    if desc: print(f"     description: {str(desc)[:100]}")
+                    img = _deep_find(body, ("imageUrl", "image", "photo", "mainPhoto", "coverImage"))
+                    if img: print(f"     image_url: {str(img)[:80]}")
+                    content_ok = True
+            if not price_ok:
+                price = _deep_find(body, ("price", "cardPrice", "finalPrice", "currentPrice", "salePriceU"))
+                if price is not None:
+                    from decimal import Decimal
+                    p = Decimal(str(price))
+                    if p > 100_000: p = p / 100
+                    print(f"\n  ✅ [price: {url_short}]  {p:.2f} ₽")
+                    price_ok = True
+            if not stock_ok:
+                qty = _deep_find(body, ("qty", "quantity", "stock", "count", "totalQty", "remains"))
+                ins = _deep_find(body, ("inStock", "in_stock", "available", "isAvailable", "availability"))
+                if qty is not None or ins is not None:
+                    print(f"\n  ✅ [stock: {url_short}]  in_stock={bool(ins)}  qty={qty}")
+                    stock_ok = True
+
+        if not (content_ok or price_ok or stock_ok):
+            print("\n  ⚠️  XHR-данные не найдены — пробуем DOM...")
+            for sel in ("h1", "[class*='title']", "[class*='Title']", "[class*='name']"):
+                el = await page.query_selector(sel)
+                if el:
+                    t = (await el.text_content() or "").strip()
+                    if len(t) > 3:
+                        print(f"  → DOM h1/title: {t[:80]}")
+                        break
+            print(f"  📸 Скриншот: {debug_screenshot}")
+            try:
+                await page.screenshot(path=debug_screenshot, full_page=True)
+            except Exception:
+                pass
+
+        await context.close()
+        await browser.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Ozon — L2 Playwright (Akamai bot-protect блокирует httpx)
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def test_ozon() -> None:
-    _sep("Ozon", OZON_ITEM_ID)
-    from app.scrapers.ozon import OzonScraper
-    sc = OzonScraper(_no_proxy())
-    for fn, lbl in [
-        (sc.collect_content, "content"),
-        (sc.collect_price,   "price"),
-        (sc.collect_stock,   "stock"),
-    ]:
-        try:
-            _ok(lbl, await fn(OZON_ITEM_ID))
-        except Exception as e:
-            _err(lbl, e)
-    try:
-        _ok("reviews (3)", await sc.collect_reviews(OZON_ITEM_ID, take=3))
-    except Exception as e:
-        _err("reviews", e)
+    _sep("Ozon (Playwright)", OZON_URL)
+    print("  ℹ️  Ozon блокирует httpx через Akamai → используем Playwright")
+    print("      Перехватываем ответ composer-api.bx во время загрузки страницы")
+    await _playwright_intercept(
+        platform_name="Ozon",
+        product_url=OZON_URL,
+        api_url_hint="composer-api.bx",
+        debug_screenshot="/tmp/ozon_debug.png",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Lenta — L1 httpx  (QRATOR, мобильный UA)
+#  Lenta — L2 Playwright (401 на httpx — нужны сессионные cookies браузера)
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def test_lenta() -> None:
-    _sep("Lenta", LENTA_ID)
-    print("  ℹ️  L1 httpx с LentaApp User-Agent. Если QRATOR блокирует → увидишь API_UNAVAILABLE")
-    print("      → В проде автоматически пойдёт в L2 Playwright")
-    from app.scrapers.lenta import LentaScraper
-    sc = LentaScraper(_no_proxy())
-    for fn, lbl in [
-        (sc.collect_content, "content"),
-        (sc.collect_price,   "price"),
-        (sc.collect_stock,   "stock"),
-    ]:
-        try:
-            _ok(lbl, await fn(LENTA_ID))
-        except Exception as e:
-            _err(lbl, e)
-    try:
-        _ok("reviews (3)", await sc.collect_reviews(LENTA_ID, take=3))
-    except Exception as e:
-        _err("reviews", e)
+    _sep("Lenta (Playwright)", LENTA_URL)
+    print("  ℹ️  lenta.com/api/v1 требует auth. Playwright открывает сайт как браузер")
+    print("      и перехватывает XHR-запросы к /api/v1/products/")
+    await _playwright_intercept(
+        platform_name="Lenta",
+        product_url=LENTA_URL,
+        api_url_hint="/api/v1/products",
+        debug_screenshot="/tmp/lenta_debug.png",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -350,17 +460,17 @@ async def main() -> None:
     print("  CAT Scraper — локальный тест  (4 площадки, 1 товар)")
     print("━" * 60)
     print("\n  ⚙️  Перед запуском замени ID/URL в начале скрипта!")
-    print("      WB_NM_ID, OZON_ITEM_ID, LENTA_ID, SAMOCAT_URL\n")
+    print("      WB_NM_ID, OZON_URL, LENTA_URL, SAMOCAT_URL\n")
 
     t0 = time.monotonic()
 
-    # WB и Ozon — параллельно (httpx)
-    await asyncio.gather(test_wb(), test_ozon(), return_exceptions=True)
+    # WB — L1 httpx (с fallback wb.ru → wildberries.ru)
+    await test_wb()
 
-    # Лента — отдельно (может блокировать QRATOR)
-    await test_lenta()
+    # Ozon и Lenta — Playwright (параллельно: оба требуют браузер)
+    await asyncio.gather(test_ozon(), test_lenta(), return_exceptions=True)
 
-    # Самокат — последним (Playwright, тяжелее)
+    # Самокат — последним (Playwright + geo-init, тяжелее)
     await test_samocat()
 
     elapsed = time.monotonic() - t0

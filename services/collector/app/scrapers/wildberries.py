@@ -192,15 +192,21 @@ class WildberriesScraper(BaseScraper):
             async def _fetch(url=api_url):
                 resp = await self._get(url, params=params)
                 if resp.status_code == 404:
-                    raise ScraperError("NOT_FOUND", f"nm_id={nm_id} not found on WB")
+                    # HTTP 404 from this domain means the endpoint may have migrated.
+                    # The WB card API returns 200 + empty products[] for missing products,
+                    # never HTTP 404. So 404 here = endpoint gone, try next domain.
+                    raise ScraperError(
+                        "API_UNAVAILABLE",
+                        f"HTTP 404 from {url} — endpoint may have migrated",
+                    )
                 resp.raise_for_status()
                 return resp.json()
 
             try:
                 data = await self.with_retry(_fetch)
             except ScraperError as exc:
-                if exc.code in ("NOT_FOUND", "RATE_LIMITED"):
-                    raise  # definitive result — no point trying other domains
+                if exc.code == "RATE_LIMITED":
+                    raise  # rate limit is global — no point trying other domains
                 last_exc = exc
                 logger.debug(
                     "WBScraper: %s → %s — trying next domain", api_url, exc.code
@@ -213,6 +219,7 @@ class WildberriesScraper(BaseScraper):
                 raise ScraperError("PARSE_ERROR", f"Unexpected response structure: {exc}") from exc
 
             if not products:
+                # Response arrived but product doesn't exist on WB — definitive.
                 raise ScraperError("NOT_FOUND", f"No products found for nm_id={nm_id}")
 
             return products[0]
