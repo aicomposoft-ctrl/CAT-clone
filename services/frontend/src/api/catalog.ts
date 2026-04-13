@@ -102,9 +102,8 @@ export const skusApi = {
   bulkUpload: async (file: File): Promise<BulkUploadResult> => {
     const form = new FormData()
     form.append('file', file)
-    const r = await apiClient.post<BulkUploadResult>('/skus/bulk-upload', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    // Do NOT set Content-Type manually — same reason as uploadImage above.
+    const r = await apiClient.post<BulkUploadResult>('/skus/bulk-upload', form)
     return r.data
   },
 }
@@ -148,9 +147,9 @@ export const referenceApi = {
   uploadImage: async (skuId: string, file: File): Promise<{ url: string }> => {
     const form = new FormData()
     form.append('file', file)
-    const r = await apiClient.post<{ presigned_url: string }>(`/skus/${skuId}/reference/image`, form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    // Do NOT set Content-Type manually — browser/Axios must generate it with the
+    // multipart boundary. Overriding it drops the boundary and breaks server parsing.
+    const r = await apiClient.post<{ presigned_url: string }>(`/skus/${skuId}/reference/image`, form)
     return { url: rewriteMinioUrl(r.data.presigned_url) }
   },
 
