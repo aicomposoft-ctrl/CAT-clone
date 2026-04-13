@@ -17,6 +17,7 @@ Note on instantiation:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -50,20 +51,33 @@ class PlaywrightScraper:
     L2 scraper using Playwright headless Chromium.
 
     Args:
-        platform:     Platform ORM object (needs .name attribute).
-        selectors:    Dict of CSS selectors from platform config, e.g.
-                      {"title": ".product-title", "price": ".price-value"}.
-        browser_pool: BrowserPool singleton from get_browser_pool().
+        platform:        Platform ORM object (needs .name attribute).
+        selectors:       Dict of CSS selectors from platform config, e.g.
+                         {"title": ".product-title", "price": ".price-value"}.
+        browser_pool:    BrowserPool singleton from get_browser_pool().
+        platform_config: Optional platform-level config from platforms.platform_config:
+            geolocation:      {"latitude": 55.7558, "longitude": 37.6173}
+                              Passed to Playwright context — enables location-aware sites.
+            geo_init_url:     URL to navigate to BEFORE the product URL (e.g. "https://samokat.ru")
+                              Establishes a geo-gated session (delivery zone, store selection).
+            geo_init_wait_ms: ms to wait after geo_init_url load for JS to settle (default 2500).
     """
 
     scraper_level: int = 2
     rate_limit: float = 0.5  # requests per second (1 req every 2 s)
 
-    def __init__(self, platform, selectors: dict, browser_pool: BrowserPool) -> None:
+    def __init__(
+        self,
+        platform,
+        selectors: dict,
+        browser_pool: BrowserPool,
+        platform_config: Optional[dict] = None,
+    ) -> None:
         self._platform = platform
         self._platform_name: str = getattr(platform, "name", str(platform))
         self._selectors: dict = selectors or {}
         self._pool = browser_pool
+        self._platform_config: dict = platform_config or {}
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -86,10 +100,18 @@ class PlaywrightScraper:
         """
         proxy = self._build_proxy()
 
-        async with self._pool.acquire(proxy=proxy) as page:
+        # Geolocation context — required for geo-gated platforms (e.g. Samokat).
+        # Permissions must be granted BEFORE navigation for the site's JS to receive them.
+        geolocation = self._platform_config.get("geolocation")
+        permissions = ["geolocation"] if geolocation else None
+
+        async with self._pool.acquire(
+            proxy=proxy, geolocation=geolocation, permissions=permissions
+        ) as page:
             intercepted: list[dict] = []
 
-            # Wire up network interception BEFORE navigation
+            # Wire up network interception BEFORE any navigation so we catch
+            # both the geo-init warm-up request AND the product page XHR calls.
             async def _on_response(response) -> None:
                 try:
                     ct = response.headers.get("content-type", "")
@@ -101,14 +123,42 @@ class PlaywrightScraper:
 
             page.on("response", _on_response)
 
-            # Navigate to page
+            # Geo-init: navigate to the platform homepage to establish a
+            # location-aware session (e.g. Samokat delivery zone) BEFORE
+            # loading the product URL.  The geolocation set on the context
+            # is provided to the page automatically by the browser.
+            geo_init_url = self._platform_config.get("geo_init_url")
+            if geo_init_url:
+                try:
+                    await page.goto(
+                        geo_init_url, wait_until="networkidle", timeout=_LOAD_TIMEOUT_MS
+                    )
+                    wait_ms = int(self._platform_config.get("geo_init_wait_ms", 2500))
+                    await asyncio.sleep(wait_ms / 1000)
+                    # Clear intercepted data from the homepage — we only want product data
+                    intercepted.clear()
+                    logger.debug(
+                        "PlaywrightScraper: geo-init complete for %s via %s",
+                        self._platform_name,
+                        geo_init_url,
+                    )
+                except Exception as exc:
+                    # Non-fatal: log and continue — product page may still load
+                    logger.warning(
+                        "PlaywrightScraper: geo-init failed for %s (%s): %s — continuing",
+                        self._platform_name,
+                        geo_init_url,
+                        exc,
+                    )
+
+            # Navigate to actual product page
             try:
                 await page.goto(url, wait_until="networkidle", timeout=_LOAD_TIMEOUT_MS)
             except Exception as exc:
                 await self._save_debug_screenshot(page, url)
                 raise ScraperError(
                     "API_UNAVAILABLE",
-                    f"PlaywrightScraper: page load failed for {url}: {exc}",
+                    f"PlaywrightScraper: page load failed for {self._platform_name}: {exc}",
                 ) from exc
 
             # Anti-bot heuristic: look for CAPTCHA / access denied indicators

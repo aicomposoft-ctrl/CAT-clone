@@ -306,6 +306,7 @@ class ScraperRouter:
             from app.scrapers.playwright_scraper import PlaywrightScraper
             from app.core.browser_pool import get_browser_pool
             selectors = creds.selectors if creds and hasattr(creds, "selectors") else {}
+            platform_config = getattr(platform, "platform_config", None) or {}
             try:
                 pool = get_browser_pool()
             except RuntimeError:
@@ -314,7 +315,7 @@ class ScraperRouter:
                     "(not running in collector-playwright worker?)"
                 )
                 return None
-            return PlaywrightScraper(platform, selectors or {}, pool)
+            return PlaywrightScraper(platform, selectors or {}, pool, platform_config)
 
         if level == "l3":
             from app.scrapers.agent_scraper import AgentScraper

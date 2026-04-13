@@ -53,6 +53,11 @@ class Platform(Base):
     #   'agent'      → L3 only (Claude extraction)
     #   'api'        → L0/L1 only, no browser
     scraper_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
+    # Added in migration 0016. Platform-specific browser/scraper configuration.
+    # Example for geo-gated platforms (Samokat):
+    #   {"geolocation": {"latitude": 55.7558, "longitude": 37.6173},
+    #    "geo_init_url": "https://samokat.ru", "geo_init_wait_ms": 2500}
+    platform_config: Mapped[Optional[dict]] = mapped_column(JSON(), nullable=True)
 
 
 class SKU(Base):

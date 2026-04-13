@@ -107,6 +107,8 @@ class BrowserPool:
     async def acquire(
         self,
         proxy: Optional[dict] = None,
+        geolocation: Optional[dict] = None,
+        permissions: Optional[list] = None,
     ) -> AsyncIterator:
         """
         Acquire a browser page from the pool.
@@ -115,8 +117,13 @@ class BrowserPool:
         browser, then yields a Page.  The context is closed on exit.
 
         Args:
-            proxy: Optional Playwright proxy dict, e.g.
-                   {"server": "http://host:port", "username": "u", "password": "p"}
+            proxy:        Optional Playwright proxy dict, e.g.
+                          {"server": "http://host:port", "username": "u", "password": "p"}
+            geolocation:  Optional geolocation override, e.g.
+                          {"latitude": 55.7558, "longitude": 37.6173, "accuracy": 10}
+                          Required for geo-gated platforms like Samokat.
+            permissions:  List of browser permissions to grant, e.g. ["geolocation"].
+                          Must be set together with geolocation for sites that request it.
 
         Yields:
             playwright Page object.
@@ -145,6 +152,10 @@ class BrowserPool:
             }
             if proxy:
                 context_kwargs["proxy"] = proxy
+            if geolocation:
+                context_kwargs["geolocation"] = geolocation
+            if permissions:
+                context_kwargs["permissions"] = permissions
 
             context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
