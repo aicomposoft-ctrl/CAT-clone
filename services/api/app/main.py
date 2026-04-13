@@ -12,10 +12,12 @@ See: .claude/rules/secrets-management.md
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings, validate_required_secrets
 from app.alerts.router import router as alerts_router
@@ -68,6 +70,23 @@ app = FastAPI(
     docs_url=None if _is_production else "/docs",
     redoc_url=None if _is_production else "/redoc",
 )
+
+# CORS — allow browser requests from any origin in dev/staging.
+# In production restrict to real frontend domain via CORS_ORIGINS env var.
+_cors_origins: list[str] = (
+    os.environ.get("CORS_ORIGINS", "").split(",")
+    if _is_production and os.environ.get("CORS_ORIGINS")
+    else ["*"]
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/health", tags=["health"], include_in_schema=False)
 async def health_check() -> dict:
