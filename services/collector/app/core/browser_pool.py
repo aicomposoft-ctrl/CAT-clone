@@ -159,6 +159,14 @@ class BrowserPool:
 
             context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
+            # Stealth: remove webdriver property and navigator.plugins signature
+            # that Ozon/WB anti-bot checks for headless detection.
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU','ru','en-US','en']});
+                window.chrome = {runtime: {}};
+            """)
             try:
                 yield page
             finally:
