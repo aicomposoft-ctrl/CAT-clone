@@ -51,6 +51,17 @@ _FALLBACK_CODES = frozenset({
 # Registry mapping api_token_type → L0 scraper class constructor (takes token: str)
 L0_REGISTRY: dict[str, type] = {}
 
+# URL templates for L2 (PlaywrightScraper needs a full page URL, not just sku_id).
+# {sku_id} is replaced with the external platform ID at runtime.
+_L2_URL_TEMPLATES: dict[str, str] = {
+    "Wildberries": "https://www.wildberries.ru/catalog/{sku_id}/detail.aspx",
+    "Ozon":        "https://www.ozon.ru/product/{sku_id}/",
+    "Лента":       "https://lenta.com/product/{sku_id}/",
+    "Lenta":       "https://lenta.com/product/{sku_id}/",
+    "Самокат":     "https://samokat.ru/product/{sku_id}",
+    "Samocat":     "https://samokat.ru/product/{sku_id}",
+}
+
 # Allowlist of valid fallback chain level identifiers
 _VALID_LEVELS = frozenset({"l0", "l1", "l2", "l3"})
 
@@ -123,7 +134,7 @@ class ScraperRouter:
                 continue
 
             try:
-                result = self._invoke(scraper, sku_id, data_type)
+                result = self._invoke(scraper, sku_id, data_type, platform.name)
                 # Return result alongside the scraper_level as a tuple so tasks
                 # can persist provenance to the DB without mutating result objects.
                 # Callers unpack: data, scraper_level = router.collect(...)
@@ -336,7 +347,8 @@ class ScraperRouter:
         return None
 
     def _invoke(
-        self, scraper: BaseScraper, sku_id: str, data_type: DataType
+        self, scraper: BaseScraper, sku_id: str, data_type: DataType,
+        platform_name: str = "",
     ) -> ScrapedData:
         """
         Call the scraper's collect() method.
@@ -349,22 +361,33 @@ class ScraperRouter:
             return scraper.collect(sku_id, data_type)
 
         # L1+ scrapers — async; run in a new event loop from the sync Celery worker
-        return asyncio.run(self._invoke_async(scraper, sku_id, data_type))
+        return asyncio.run(self._invoke_async(scraper, sku_id, data_type, platform_name))
 
     @staticmethod
     async def _invoke_async(
-        scraper, sku_id: str, data_type: DataType
+        scraper, sku_id: str, data_type: DataType, platform_name: str = ""
     ) -> ScrapedData:
         """
         Dispatch to the appropriate async collect method.
 
-        L1 scrapers: calls collect_content/price/stock/reviews(nm_id).
-        L2 scrapers (PlaywrightScraper): calls collect(url, data_type) where
-            sku_id is expected to carry the full platform URL for L2 requests.
+        L1 scrapers: calls collect_content/price/stock/reviews(sku_id).
+        L2/L3 scrapers (PlaywrightScraper/AgentScraper): calls collect(url, data_type)
+            where url is built from _L2_URL_TEMPLATES using sku_id.
         """
         # L2 and L3: unified collect(url, data_type) interface
         if getattr(scraper, "scraper_level", 1) in (2, 3):
-            return await scraper.collect(sku_id, data_type)
+            tmpl = _L2_URL_TEMPLATES.get(platform_name)
+            if tmpl:
+                url = tmpl.format(sku_id=sku_id)
+            else:
+                # Fallback: treat sku_id as full URL (legacy behaviour)
+                url = sku_id
+                logger.warning(
+                    "ScraperRouter: no URL template for platform=%r — "
+                    "passing sku_id as URL for L2 (may fail)",
+                    platform_name,
+                )
+            return await scraper.collect(url, data_type)
 
         # L1: legacy per-type methods
         if data_type == DataType.CONTENT:
