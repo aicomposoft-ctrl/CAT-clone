@@ -1,0 +1,27 @@
+FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+# Playwright image already has Chromium and its system deps.
+# Only add what we need on top: libpq for psycopg2.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 \
+        libpq-dev \
+        gcc \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt requirements-playwright.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-playwright.txt
+
+COPY app/ ./app/
+
+# --pool=solo: required — Playwright is not fork-safe.
+# --queues=playwright: only processes tasks routed to this queue.
+# PLAYWRIGHT_WORKER=1: triggers browser_pool auto-init on worker_init signal.
+CMD ["celery", "-A", "app.celery_app:celery_app", "worker", \
+     "--loglevel=info", "--pool=solo", "--queues=playwright", "--concurrency=1"]

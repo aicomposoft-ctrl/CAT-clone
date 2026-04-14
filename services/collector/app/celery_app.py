@@ -45,6 +45,12 @@ def _validate_secrets() -> None:
 
 _validate_secrets()
 
+# When PLAYWRIGHT_WORKER=1 the BrowserPool signals must be registered before
+# any tasks run.  Importing browser_pool here wires worker_init / worker_shutdown
+# at module load time — safe in solo pool, must NOT run in forking prefork workers.
+if os.environ.get("PLAYWRIGHT_WORKER") == "1":
+    from app.core import browser_pool  # noqa: F401 — side-effect import (signal wiring)
+
 celery_app = Celery(
     "cat_collector",
     broker=REDIS_URL,
@@ -81,6 +87,12 @@ celery_app.conf.update(
     enable_utc=True,
     worker_prefetch_multiplier=1,
     task_acks_late=True,
+    # Route Ozon tasks to the playwright queue — Ozon L1 (httpx) is blocked by
+    # anti-bot (403), so these must run in collector-playwright (BrowserPool
+    # available for L2 fallback).  All other tasks use the default queue.
+    task_routes={
+        "ozon.*": {"queue": "playwright"},
+    },
 )
 
 

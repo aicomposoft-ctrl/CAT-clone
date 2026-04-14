@@ -23,7 +23,9 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from app.celery_app import celery_app
+import redis as redis_lib
+
+from app.celery_app import REDIS_URL, celery_app
 from app.core.base_scraper import DataType, ScraperError
 from app.core.scraper_router import ScraperRouter
 from app.models import PriceSnapshot, SKUPlatform, SKU
@@ -71,7 +73,8 @@ def collect_wb_price(self, sku_platform_id: str) -> None:
         return
 
     with get_db_session() as db:
-        router = ScraperRouter(db)
+        _redis = redis_lib.from_url(REDIS_URL, decode_responses=False)
+        router = ScraperRouter(db, redis_client=_redis)
         try:
             price_data = router.collect(
                 platform_id=platform_id,

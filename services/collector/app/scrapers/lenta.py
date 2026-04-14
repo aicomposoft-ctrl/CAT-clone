@@ -17,11 +17,15 @@ from typing import Optional
 
 import httpx
 
+import asyncio
+
 from app.core.base_scraper import (
     BaseScraper,
     ContentData,
+    DataType,
     PriceData,
     ReviewData,
+    ScrapedData,
     ScraperError,
     StockData,
 )
@@ -251,6 +255,17 @@ class LentaScraper(BaseScraper):
             ))
 
         return result
+
+    def collect(self, sku_id: str, data_type: DataType) -> ScrapedData:
+        if data_type == DataType.CONTENT:
+            return asyncio.run(self.collect_content(sku_id))
+        if data_type == DataType.PRICE:
+            return asyncio.run(self.collect_price(sku_id))
+        if data_type == DataType.STOCK:
+            return asyncio.run(self.collect_stock(sku_id))
+        if data_type == DataType.REVIEWS:
+            return asyncio.run(self.collect_reviews(sku_id))
+        raise ValueError(f"Unknown DataType: {data_type}")
 
     # ── Private helpers ────────────────────────────────────────────────────
 

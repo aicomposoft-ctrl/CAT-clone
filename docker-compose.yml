@@ -98,6 +98,33 @@ services:
     command: celery -A app.celery_app worker --loglevel=info --queues=ml --concurrency=2
     restart: unless-stopped
 
+  # ─── Collector-Playwright (L2 Celery Worker — solo pool, Playwright browsers) ──
+  collector-playwright:
+    build:
+      context: ./services/collector
+      dockerfile: Dockerfile.playwright
+    env_file: .env
+    environment:
+      <<: *common-env
+      PLAYWRIGHT_WORKER: "1"
+      BROWSER_POOL_SIZE: "2"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./services/collector:/app
+      - /dev/shm:/dev/shm
+    ipc: host
+    # --pool=solo: Playwright is not fork-safe; solo pool runs tasks sequentially
+    # in the main thread, which is fine because Playwright is async-internal.
+    # --queues=playwright: receives only tasks explicitly routed here (L2 tasks).
+    command: >
+      celery -A app.celery_app:celery_app worker
+      --loglevel=info --pool=solo --queues=playwright --concurrency=1
+    restart: unless-stopped
+
   # ─── Beat (Celery Scheduler — exactly 1 replica) ─────────────────────────────
   beat:
     build:

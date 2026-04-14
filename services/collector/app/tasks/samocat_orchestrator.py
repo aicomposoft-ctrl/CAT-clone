@@ -42,7 +42,7 @@ from app.tasks.samocat_stock_task import collect_samocat_stock
 
 logger = logging.getLogger(__name__)
 
-_SK_PLATFORM_NAME = "Samocat"
+_SK_PLATFORM_NAME = "Самокат"
 
 
 def _load_samocat_sku_platform_ids(db) -> list[str]:

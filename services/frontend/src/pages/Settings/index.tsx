@@ -476,8 +476,11 @@ function SKUsTab() {
           <Form.Item name="article" label="Артикул (внутренний)">
             <Input placeholder="VIO-001" />
           </Form.Item>
-          <Form.Item name="rpc" label="RPC / штрихкод платформы">
+          <Form.Item name="rpc" label="RPC">
             <Input />
+          </Form.Item>
+          <Form.Item name="barcode" label="Штрихкод EAN">
+            <Input placeholder="4607161624661" />
           </Form.Item>
           <Form.Item name="category" label="Категория">
             <Input placeholder="Молочные продукты" />
@@ -515,6 +518,9 @@ function SKUsTab() {
           </Form.Item>
           <Form.Item name="rpc" label="RPC">
             <Input />
+          </Form.Item>
+          <Form.Item name="barcode" label="Штрихкод EAN">
+            <Input placeholder="4607161624661" />
           </Form.Item>
           <Form.Item name="category" label="Категория">
             <Input />

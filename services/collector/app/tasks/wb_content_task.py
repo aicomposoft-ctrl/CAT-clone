@@ -32,7 +32,9 @@ from datetime import date, datetime, timezone
 
 import httpx
 
-from app.celery_app import celery_app
+import redis as redis_lib
+
+from app.celery_app import REDIS_URL, celery_app
 from app.core.base_scraper import ContentData, DataType, ScraperError
 from app.core.proxy import get_proxy_rotator
 from app.core.sanitize import sanitize
@@ -167,7 +169,8 @@ def collect_wb_content(self, sku_platform_id: str) -> None:
         return
 
     with get_db_session() as db:
-        router = ScraperRouter(db)
+        _redis = redis_lib.from_url(REDIS_URL, decode_responses=False)
+        router = ScraperRouter(db, redis_client=_redis)
         try:
             content = router.collect(
                 platform_id=platform_id,

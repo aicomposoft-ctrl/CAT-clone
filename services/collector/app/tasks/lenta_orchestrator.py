@@ -42,7 +42,8 @@ from app.tasks.lenta_stock_task import collect_lenta_stock
 
 logger = logging.getLogger(__name__)
 
-_LT_PLATFORM_NAME = "Lenta"
+# DB seed uses Cyrillic "Лента"; older seeds may have Latin "Lenta" — match both.
+_LT_PLATFORM_NAMES = ["Лента", "Lenta"]
 
 
 def _load_lenta_sku_platform_ids(db) -> list[str]:
@@ -55,7 +56,7 @@ def _load_lenta_sku_platform_ids(db) -> list[str]:
         .join(Platform, Platform.id == SKUPlatform.platform_id)
         .join(SKU, SKU.id == SKUPlatform.sku_id)
         .filter(
-            Platform.name == _LT_PLATFORM_NAME,
+            Platform.name.in_(_LT_PLATFORM_NAMES),
             Platform.is_active.is_(True),
             SKUPlatform.is_monitored.is_(True),
         )
