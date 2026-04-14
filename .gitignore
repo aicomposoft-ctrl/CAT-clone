@@ -1,0 +1,99 @@
+# Environment & Secrets
+.env
+.env.prod
+.env.test
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+htmlcov/
+*.log
+*.pot
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+
+# ML Models (large binary files)
+*.bin
+*.safetensors
+*.pt
+*.pth
+~/.cache/huggingface/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp
+.pnp.js
+
+# Build output
+services/frontend/build/
+services/frontend/dist/
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# Alembic (keep versions, ignore generated)
+# infrastructure/postgres/alembic/versions/*.pyc
+
+# MinIO data (local dev)
+minio_data/
+
+# Logs
+logs/
+*.log
+
+# Coverage reports
+coverage/
+.nyc_output/
+
+# Playwright
+playwright-report/
+test-results/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

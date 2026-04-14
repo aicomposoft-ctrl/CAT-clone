@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CJM Вариант B — Digital Commerce Agency</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f7f3ff; color: #1a202c; }
+
+  .header {
+    background: linear-gradient(135deg, #553c9a 0%, #805ad5 100%);
+    color: white; padding: 32px 40px; text-align: center;
+  }
+  .header h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+  .header .subtitle { font-size: 14px; opacity: 0.85; }
+  .header .meta { display: flex; gap: 32px; justify-content: center; margin-top: 20px; }
+  .header .meta-item { text-align: center; }
+  .header .meta-item .label { font-size: 11px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; }
+  .header .meta-item .value { font-size: 15px; font-weight: 600; margin-top: 4px; }
+
+  .persona-card {
+    max-width: 900px; margin: 24px auto; background: white;
+    border-radius: 12px; padding: 24px; display: flex; gap: 24px;
+    align-items: flex-start; box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .persona-avatar {
+    width: 80px; height: 80px; border-radius: 50%;
+    background: linear-gradient(135deg, #553c9a, #9f7aea);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px; flex-shrink: 0;
+  }
+  .persona-info h2 { font-size: 18px; color: #553c9a; margin-bottom: 4px; }
+  .persona-info .role { font-size: 13px; color: #718096; margin-bottom: 12px; }
+  .persona-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag { background: #f3ebff; color: #553c9a; border-radius: 20px; padding: 4px 12px; font-size: 12px; font-weight: 500; }
+  .tag.pain { background: #fff5f5; color: #c53030; }
+  .tag.goal { background: #f0fff4; color: #276749; }
+
+  .cjm-container { max-width: 1200px; margin: 0 auto 40px; padding: 0 20px; }
+
+  .stages-top {
+    display: grid;
+    grid-template-columns: 140px repeat(5, 1fr);
+    gap: 8px; margin-bottom: 8px;
+  }
+  .stage-header-cell {
+    background: #553c9a; color: white; text-align: center;
+    padding: 14px 8px; border-radius: 8px 8px 0 0;
+    font-weight: 700; font-size: 13px;
+  }
+  .stage-num { font-size: 20px; font-weight: 900; display: block; margin-bottom: 2px; opacity: 0.7; }
+
+  .row { display: grid; grid-template-columns: 140px repeat(5, 1fr); gap: 8px; margin-bottom: 8px; align-items: stretch; }
+  .row-label {
+    background: #553c9a; color: white; display: flex; align-items: center;
+    justify-content: center; text-align: center; padding: 12px 8px;
+    border-radius: 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  }
+  .cell {
+    background: white; border-radius: 8px; padding: 12px; min-height: 90px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06); font-size: 12px; line-height: 1.5;
+  }
+  .cell ul { list-style: none; }
+  .cell ul li::before { content: "• "; color: #553c9a; }
+  .cell ul li { margin-bottom: 4px; }
+
+  .emotion-row { display: grid; grid-template-columns: 140px repeat(5, 1fr); gap: 8px; margin-bottom: 8px; }
+  .emotion-cell {
+    background: white; border-radius: 8px; padding: 12px;
+    text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .emoji { font-size: 28px; display: block; margin-bottom: 6px; }
+  .emotion-label { font-size: 11px; color: #718096; }
+
+  .nps-row { display: grid; grid-template-columns: 140px repeat(5, 1fr); gap: 8px; margin-bottom: 8px; }
+  .nps-cell {
+    background: white; border-radius: 8px; padding: 12px;
+    text-align: center; font-size: 13px; font-weight: 700;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .nps-low { color: #c53030; }
+  .nps-mid { color: #d69e2e; }
+  .nps-high { color: #276749; }
+
+  .opp-cell {
+    background: #fdf5ff; border: 1px solid #d6bcfa; border-radius: 8px;
+    padding: 12px; min-height: 80px; font-size: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .opp-cell .opp-title { color: #553c9a; font-weight: 600; margin-bottom: 4px; }
+
+  .tp-badge {
+    display: inline-block; background: #f3ebff; color: #553c9a;
+    border-radius: 4px; padding: 2px 6px; font-size: 10px;
+    margin: 2px; font-weight: 500;
+  }
+
+  .kpi-box {
+    background: #553c9a; color: white; border-radius: 8px; padding: 12px;
+    font-size: 11px; margin-bottom: 8px;
+  }
+  .kpi-box .kpi-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .kpi-box .kpi-value { font-weight: 700; font-size: 16px; }
+
+  .section-title {
+    background: #553c9a; color: white; padding: 8px 16px;
+    font-size: 11px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; border-radius: 6px;
+    margin-bottom: 4px; display: flex; align-items: center; gap: 6px;
+  }
+
+  /* Timeline connector */
+  .timeline {
+    display: grid; grid-template-columns: 140px repeat(5, 1fr);
+    gap: 8px; margin-bottom: 16px;
+  }
+  .timeline-cell {
+    display: flex; align-items: center; justify-content: center;
+    gap: 4px; font-size: 11px; color: #553c9a; font-weight: 600;
+    padding: 6px;
+  }
+  .timeline-cell .arrow { font-size: 18px; }
+
+  .footer {
+    text-align: center; padding: 24px; color: #718096;
+    font-size: 12px; border-top: 1px solid #e2e8f0;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Customer Journey Map — Вариант B</h1>
+  <div class="subtitle">Digital Commerce Agency (Easy Commerce и аналоги) — внутренний use case</div>
+  <div class="meta">
+    <div class="meta-item">
+      <div class="label">Персона</div>
+      <div class="value">Алексей В., 35 лет</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Должность</div>
+      <div class="value">Head of Analytics, Easy Commerce</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Клиентов в портфеле</div>
+      <div class="value">15 FMCG-брендов</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">SKU под управлением</div>
+      <div class="value">8,000+ SKU</div>
+    </div>
+  </div>
+</div>
+
+<div class="persona-card">
+  <div class="persona-avatar">🧑‍💻</div>
+  <div class="persona-info">
+    <h2>Алексей Волков</h2>
+    <div class="role">Head of Analytics · Easy Commerce Agency · Москва</div>
+    <div class="persona-tags">
+      <span class="tag pain">😤 Боль: аналитики тратят 60% времени на сбор данных вручную</span>
+      <span class="tag pain">😤 Боль: отчёты готовятся 3 дня вместо 1ч</span>
+      <span class="tag pain">😤 Боль: не масштабируемся на новых клиентов</span>
+      <span class="tag goal">🎯 Цель: автоматизировать репортинг для 15+ клиентов</span>
+      <span class="tag goal">🎯 Цель: добавить 5 новых клиентов без найма аналитиков</span>
+      <span class="tag">📊 KPI: time-to-report, client NPS, margin per client</span>
+    </div>
+  </div>
+</div>
+
+<div class="cjm-container">
+
+  <!-- Stage headers -->
+  <div class="stages-top">
+    <div></div>
+    <div class="stage-header-cell"><span class="stage-num">01</span>БОЛЬ ОСОЗНАНА</div>
+    <div class="stage-header-cell"><span class="stage-num">02</span>ВНЕДРЕНИЕ CAT</div>
+    <div class="stage-header-cell"><span class="stage-num">03</span>ПЕРВЫЙ КЛИЕНТ НА CAT</div>
+    <div class="stage-header-cell"><span class="stage-num">04</span>МАСШТАБИРОВАНИЕ</div>
+    <div class="stage-header-cell"><span class="stage-num">05</span>СТРАТЕГИЧЕСКОЕ УТП</div>
+  </div>
+
+  <!-- Timeline -->
+  <div class="timeline">
+    <div></div>
+    <div class="timeline-cell">День 1-7</div>
+    <div class="timeline-cell"><span class="arrow">→</span> Неделя 2-4</div>
+    <div class="timeline-cell"><span class="arrow">→</span> Месяц 2</div>
+    <div class="timeline-cell"><span class="arrow">→</span> Месяц 3-6</div>
+    <div class="timeline-cell"><span class="arrow">→</span> Месяц 6+</div>
+  </div>
+
+  <!-- Trigger -->
+  <div class="section-title" style="margin-left: 148px;">🚨 Триггер и действия</div>
+  <div class="row">
+    <div class="row-label">ДЕЙСТВИЯ</div>
+    <div class="cell">
+      <ul>
+        <li>Аналитик сдал отчёт с ошибкой из-за ручного копирования</li>
+        <li>Клиент жалуется на задержку отчёта</li>
+        <li>Алексей считает: 15 клиентов × 40ч/нед = 600ч/нед → нерентабельно</li>
+        <li>Принимает решение: нужна система мониторинга</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Настраивает CAT под первых 3 клиентов</li>
+        <li>Создаёт шаблоны эталонных материалов для клиентов</li>
+        <li>Настраивает расписание: сбор данных 02:00 ежедневно</li>
+        <li>Параллельная настройка Excel-шаблонов</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Первый CAT-отчёт клиенту «ИндиЛайт» готов за 2ч</li>
+        <li>Клиент восхищён: нашли 8 карточек с неверным изображением</li>
+        <li>Алексей демонстрирует алёрты о ценах конкурентов</li>
+        <li>Клиент просит расширить мониторинг</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Подключает всех 15 клиентов к CAT</li>
+        <li>Создаёт мультитенантную структуру</li>
+        <li>Автоматизирует рассылку отчётов по расписанию</li>
+        <li>Набирает 5 новых клиентов с CAT как конкурентным преимуществом</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>CAT становится ключевым отличием агентства</li>
+        <li>Продаёт подписку на CAT как отдельную услугу</li>
+        <li>Разрабатывает white-label вариант для партнёров</li>
+        <li>Интегрирует данные CAT в pitch для новых клиентов</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- KPI Impact -->
+  <div class="section-title" style="margin-left: 148px;">📈 Измеримый эффект</div>
+  <div class="row">
+    <div class="row-label">МЕТРИКИ</div>
+    <div class="cell" style="background:#fff5f5;">
+      <div style="font-weight:700;color:#c53030;font-size:14px;">БЫЛО</div>
+      <div style="margin-top:8px;font-size:12px;">
+        ⏱️ Time-to-report: 3 дня<br>
+        👥 Аналитиков: 5 человек<br>
+        💰 Стоимость отчёта: 40ч × 1000₽ = 40,000₽<br>
+        😤 Ошибки: часто
+      </div>
+    </div>
+    <div class="cell" style="background:#f0fff4;">
+      <div style="font-weight:700;color:#276749;font-size:14px;">СТАЛО</div>
+      <div style="margin-top:8px;font-size:12px;">
+        ⏱️ Time-to-report: 2 часа<br>
+        👥 Аналитиков: 2 человека<br>
+        💰 Стоимость отчёта: 2ч × 1000₽ = 2,000₽<br>
+        ✅ Ошибки: минимум
+      </div>
+    </div>
+    <div class="cell">
+      <div style="font-size:12px;">
+        📊 Клиент NPS: +30 pts<br>
+        🔄 Churn: 0% за квартал<br>
+        💼 Новые клиенты: +3 за месяц<br>
+        💡 Upsell: расширение площадок
+      </div>
+    </div>
+    <div class="cell" style="background:#f0fff4;">
+      <div style="font-weight:700;color:#276749;">×5</div>
+      <div style="font-size:12px;margin-top:4px;">Рост числа клиентов без пропорционального роста команды аналитики</div>
+    </div>
+    <div class="cell" style="background:#f0fff4;">
+      <div style="font-weight:700;color:#276749;font-size:14px;">+40% маржа</div>
+      <div style="font-size:12px;margin-top:4px;">CAT как услуга: дополнительная revenue stream → +$15K/мес</div>
+    </div>
+  </div>
+
+  <!-- Agency workflow specifics -->
+  <div class="section-title" style="margin-left: 148px;">🔄 Специфика Agency Workflow</div>
+  <div class="row">
+    <div class="row-label">WORKFLOW</div>
+    <div class="cell">
+      <ul>
+        <li>Аудит текущего процесса: сколько часов тратится</li>
+        <li>ROI-расчёт: CAT окупится за 2 недели</li>
+        <li>Выбор первого клиента-пилота</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Bulk upload SKU от клиентов (CSV)</li>
+        <li>Настройка multi-brand структуры</li>
+        <li>Изоляция данных между клиентами</li>
+        <li>Брендирование отчётов под клиента</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Автоматическая доставка отчётов клиенту по email</li>
+        <li>Клиент получает отчёт в привычном Excel-формате</li>
+        <li>Алёрты настроены на email клиента напрямую</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>Дашборд для агентства: все клиенты в одном интерфейсе</li>
+        <li>Сводная аналитика: какой клиент требует внимания</li>
+        <li>API интеграция в BI-инструменты агентства</li>
+      </ul>
+    </div>
+    <div class="cell">
+      <ul>
+        <li>White-label: отчёты с логотипом агентства</li>
+        <li>CAT как конкурентное преимущество в тендерах</li>
+        <li>Партнёрская программа с другими агентствами</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Emotions -->
+  <div class="section-title" style="margin-left: 148px;">❤️ Эмоции</div>
+  <div class="emotion-row">
+    <div class="row-label">ЭМОЦИИ</div>
+    <div class="emotion-cell"><span class="emoji">😤</span><div class="emotion-label">Фрустрация от боли</div></div>
+    <div class="emotion-cell"><span class="emoji">😰</span><div class="emotion-label">Тревога за сроки</div></div>
+    <div class="emotion-cell"><span class="emoji">🤩</span><div class="emotion-label">AHA — клиент доволен!</div></div>
+    <div class="emotion-cell"><span class="emoji">🚀</span><div class="emotion-label">Азарт масштабирования</div></div>
+    <div class="emotion-cell"><span class="emoji">💪</span><div class="emotion-label">Стратегическая уверенность</div></div>
+  </div>
+
+  <!-- NPS -->
+  <div class="section-title" style="margin-left: 148px;">📊 Удовлетворённость агентства</div>
+  <div class="nps-row">
+    <div class="row-label">ОЦЕНКА</div>
+    <div class="nps-cell nps-low">4/10<br><small style="font-weight:400;font-size:10px;">Боль максимальна</small></div>
+    <div class="nps-cell nps-mid">7/10<br><small style="font-weight:400;font-size:10px;">Настройка занимает время</small></div>
+    <div class="nps-cell nps-high">9/10<br><small style="font-weight:400;font-size:10px;">Первый успех!</small></div>
+    <div class="nps-cell nps-high">9/10<br><small style="font-weight:400;font-size:10px;">Масштаб работает</small></div>
+    <div class="nps-cell nps-high">10/10<br><small style="font-weight:400;font-size:10px;">Стратегический актив</small></div>
+  </div>
+
+  <!-- Opportunities -->
+  <div class="section-title" style="margin-left: 148px;">💡 Возможности продукта для агентского сегмента</div>
+  <div class="row">
+    <div class="row-label">ВОЗМОЖНОСТИ</div>
+    <div class="opp-cell">
+      <div class="opp-title">ROI Calculator</div>
+      Встроенный калькулятор: «Сколько часов сэкономит CAT при X клиентах?»
+    </div>
+    <div class="opp-cell">
+      <div class="opp-title">Agency bulk setup</div>
+      Импорт данных от 10 клиентов одновременно. Multi-brand CSV upload.
+    </div>
+    <div class="opp-cell">
+      <div class="opp-title">Client portal</div>
+      Отдельный read-only доступ для клиентов агентства → self-service просмотр
+    </div>
+    <div class="opp-cell">
+      <div class="opp-title">Agency dashboard</div>
+      Сводный дашборд по всем клиентам: у кого critical issues сегодня?
+    </div>
+    <div class="opp-cell">
+      <div class="opp-title">White-label + API</div>
+      Брендирование отчётов, API для интеграции с собственными BI-системами агентства
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  CAT Clone — CJM Вариант B «Digital Commerce Agency» | Сгенерировано в рамках /replicate pipeline | 2025-03-20
+</div>
+
+</body>
+</html>

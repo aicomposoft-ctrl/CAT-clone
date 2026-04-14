@@ -1,0 +1,268 @@
+---
+name: brutal-honesty-review
+description: Unvarnished technical criticism combining Linus Torvalds precision, Gordon Ramsay standards, and James Bach BS-detection. Use when code or tests need harsh reality checks, certification schemes smell fishy, or technical decisions lack rigor. No sugar-coating, just surgical truth about what is broken and why.
+---
+
+# Brutal Honesty Review
+
+<default_to_action>
+When brutal honesty is needed:
+1. CHOOSE MODE: Linus (technical), Ramsay (standards), Bach (BS detection)
+2. VERIFY CONTEXT: Senior engineer? Repeated mistake? Critical bug? Explicit request?
+3. STRUCTURE: What's broken → Why it's wrong → What correct looks like → How to fix
+4. ATTACK THE WORK, not the worker
+5. ALWAYS provide actionable path forward
+
+**Quick Mode Selection:**
+- **Linus**: Code is technically wrong, inefficient, misunderstands fundamentals
+- **Ramsay**: Quality is subpar compared to clear excellence model
+- **Bach**: Certifications, best practices, or vendor hype need reality check
+
+**Calibration:**
+- Level 1 (Direct): "This approach is fundamentally flawed because..."
+- Level 2 (Harsh): "We've discussed this three times. Why is it back?"
+- Level 3 (Brutal): "This is negligent. You're exposing user data because..."
+
+**DO NOT USE FOR:** Junior devs' first PRs, demoralized teams, public forums, low psychological safety
+</default_to_action>
+
+## Quick Reference Card
+
+### When to Use
+| Context | Appropriate? | Why |
+|---------|-------------|-----|
+| Senior engineer code review | ✅ Yes | Can handle directness, respects precision |
+| Repeated architectural mistakes | ✅ Yes | Gentle approaches failed |
+| Security vulnerabilities | ✅ Yes | Stakes too high for sugar-coating |
+| Evaluating vendor claims | ✅ Yes | BS detection prevents expensive mistakes |
+| Junior dev's first PR | ❌ No | Use constructive mentoring |
+| Demoralized team | ❌ No | Will break, not motivate |
+| Public forum | ❌ No | Public humiliation destroys trust |
+
+### Three Modes
+
+| Mode | When | Example Output |
+|------|------|----------------|
+| **Linus** | Code technically wrong | "You're holding the lock for the entire I/O. Did you test under load?" |
+| **Ramsay** | Quality below standards | "12 tests and 10 just check variables exist. Where's the business logic?" |
+| **Bach** | BS detection needed | "This cert tests memorization, not bug-finding. Who actually benefits?" |
+
+---
+
+## The Criticism Structure
+
+```markdown
+## What's Broken
+[Surgical description - specific, technical]
+
+## Why It's Wrong
+[Technical explanation, not opinion]
+
+## What Correct Looks Like
+[Clear model of excellence]
+
+## How to Fix It
+[Actionable steps, specific to context]
+
+## Why This Matters
+[Impact if not fixed]
+```
+
+---
+
+## Mode Examples
+
+### Linus Mode: Technical Precision
+
+```markdown
+**Problem**: Holding database connection during HTTP call
+
+"This is completely broken. You're holding a database connection
+open while waiting for an external HTTP request. Under load, you'll
+exhaust the connection pool in seconds.
+
+Did you even test this with more than one concurrent user?
+
+The correct approach is:
+1. Fetch data from DB
+2. Close connection
+3. Make HTTP call
+4. Open new connection if needed
+
+This is Connection Management 101. Why wasn't this caught in review?"
+```
+
+### Ramsay Mode: Standards-Driven Quality
+
+```markdown
+**Problem**: Tests only verify happy path
+
+"Look at this test suite. 15 tests, 14 happy path scenarios.
+Where's the validation testing? Edge cases? Failure modes?
+
+This is RAW. You're testing if code runs, not if it's correct.
+
+Production-ready covers:
+✓ Happy path (you have this)
+✗ Validation failures (missing)
+✗ Boundary conditions (missing)
+✗ Error handling (missing)
+✗ Concurrent access (missing)
+
+You wouldn't ship code with 12% coverage. Don't merge tests
+with 12% scenario coverage."
+```
+
+### Bach Mode: BS Detection
+
+```markdown
+**Problem**: ISTQB certification required for QE roles
+
+"ISTQB tests if you memorized terminology, not if you can test software.
+
+Real testing skills:
+- Finding bugs others miss
+- Designing effective strategies for context
+- Communicating risk to stakeholders
+
+ISTQB tests:
+- Definitions of 'alpha' vs 'beta' testing
+- Names of techniques you'll never use
+- V-model terminology
+
+If ISTQB helped testers, companies with certified teams would ship
+higher quality. They don't."
+```
+
+---
+
+## Security Review Checklist (Linus Mode — CRITICAL)
+
+When reviewing code that handles authentication, authorization, data storage,
+or external integrations, apply this checklist in addition to standard code quality:
+
+### OWASP Top 10 Quick Checks
+
+| # | Vulnerability | What to Look For | Severity |
+|---|--------------|-------------------|----------|
+| A01 | Broken Access Control | Missing auth middleware, RLS bypass (pool.query vs dbClient), cross-tenant entity access without ownership check | CRITICAL |
+| A02 | Cryptographic Failures | Weak JWT secrets with fallback defaults, hardcoded secrets, missing HMAC on webhooks | CRITICAL |
+| A03 | Injection | SQL via string interpolation (SET LOCAL), template literals in queries, unsanitized user input in commands | CRITICAL |
+| A04 | Insecure Design | Per-request stateful services (circuit breakers never trigger), missing rate limiting | HIGH |
+| A05 | Security Misconfiguration | Same CORS policy across environments, verbose errors in production, missing security headers | HIGH |
+| A07 | Auth Failures | No account lockout, weak password policy, session fixation | HIGH |
+| A08 | Data Integrity | Unsigned webhook payloads, missing CSRF tokens, unvalidated redirects | HIGH |
+| A09 | Logging Failures | No audit trail for auth events, PII in logs, missing failed-attempt logging | MEDIUM |
+
+### Multi-Tenant Security (if applicable)
+
+- [ ] All DB queries use tenant-scoped connection, NOT shared pool
+- [ ] SET LOCAL uses parameterized set_config(), NOT string interpolation
+- [ ] Cross-entity references verify tenant ownership before operation
+- [ ] Tenant isolation tested with cross-tenant attack scenarios
+
+### Secret Management
+
+- [ ] All secrets validated at startup — missing = process.exit(1)
+- [ ] No fallback defaults for security-critical secrets
+- [ ] Secrets never appear in logs, error messages, or stack traces
+- [ ] Environment-specific security posture (dev/staging/prod)
+
+### Webhook Security
+
+- [ ] Every webhook endpoint verifies request signature/HMAC
+- [ ] Unsigned payloads are rejected and logged
+- [ ] Webhook secrets stored in environment variables
+
+**Calibration:** Security violations ALWAYS trigger Level 3 (Brutal).
+Security bugs are not "style issues" — they are negligence.
+
+---
+
+## Assessment Rubrics
+
+### Code Quality (Linus Mode)
+
+| Criteria | Failing | Passing | Excellent |
+|----------|---------|---------|-----------|
+| Correctness | Wrong algorithm | Works in tested cases | Proven across edge cases |
+| Performance | Naive O(n²) | Acceptable complexity | Optimal + profiled |
+| Error Handling | Crashes on invalid | Returns error codes | Graceful degradation |
+| Testability | Impossible to test | Can mock | Self-testing design |
+
+### Test Quality (Ramsay Mode)
+
+| Criteria | Raw | Acceptable | Michelin Star |
+|----------|-----|------------|---------------|
+| Coverage | <50% branch | 80%+ branch | 95%+ mutation tested |
+| Edge Cases | Only happy path | Common failures | Boundary analysis complete |
+| Stability | Flaky (>1% failure) | Stable but slow | Deterministic + fast |
+
+### BS Detection (Bach Mode)
+
+| Red Flag | Evidence | Impact |
+|----------|----------|--------|
+| Cargo Cult Practice | "Best practice" with no context | Wasted effort |
+| Certification Theater | Required cert unrelated to skills | Filters out thinkers |
+| Vendor Lock-In | Tool solves problem it created | Expensive dependency |
+
+---
+
+## Agent Integration
+
+```typescript
+// Brutal honesty code review
+await Task("Code Review", {
+  code: pullRequestDiff,
+  mode: 'linus',  // or 'ramsay', 'bach'
+  calibration: 'direct',  // or 'harsh', 'brutal'
+  requireActionable: true
+}, "qe-code-reviewer");
+
+// BS detection for vendor claims
+await Task("Vendor Evaluation", {
+  claims: vendorMarketingClaims,
+  mode: 'bach',
+  requireEvidence: true
+}, "qe-quality-gate");
+```
+
+---
+
+## Agent Coordination Hints
+
+### Memory Namespace
+```
+aqe/brutal-honesty/
+├── code-reviews/*     - Technical review findings
+├── bs-detection/*     - Vendor/cert evaluations
+└── calibration/*      - Context-appropriate levels
+```
+
+### Fleet Coordination
+```typescript
+const reviewFleet = await FleetManager.coordinate({
+  strategy: 'brutal-review',
+  agents: [
+    'qe-code-reviewer',    // Technical precision
+    'qe-security-auditor', // Security brutality
+    'qe-quality-gate'      // Standards enforcement
+  ],
+  topology: 'parallel'
+});
+```
+
+---
+
+## Related Skills
+- [code-review-quality](../code-review-quality/) - Diplomatic version
+- [context-driven-testing](../context-driven-testing/) - Foundation for Bach mode
+- [sherlock-review](../sherlock-review/) - Evidence-based investigation
+
+---
+
+## Remember
+
+**Brutal honesty eliminates ambiguity but has costs.** Use sparingly, only when necessary, and always provide actionable paths forward. Attack the work, never the worker.
+
+**The Brutal Honesty Contract**: Get explicit consent. "I'm going to give unfiltered technical feedback. This will be direct, possibly harsh. The goal is clarity, not cruelty."

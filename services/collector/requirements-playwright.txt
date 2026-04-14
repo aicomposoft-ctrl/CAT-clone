@@ -1,0 +1,3 @@
+# Additional dependencies for the collector-playwright service.
+# These are NOT installed in the base collector image to keep it small.
+playwright==1.44.0

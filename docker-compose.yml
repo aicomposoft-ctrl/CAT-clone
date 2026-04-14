@@ -1,0 +1,238 @@
+version: "3.9"
+
+x-common-env: &common-env
+  POSTGRES_URL: ${POSTGRES_URL}
+  REDIS_URL: ${REDIS_URL}
+  CLICKHOUSE_URL: ${CLICKHOUSE_URL}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+
+services:
+  # ─── Nginx ───────────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped
+
+  # ─── API ─────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      <<: *common-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    volumes:
+      - ./services/api:/app
+      - ./infrastructure/postgres:/app/db-migrations:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ─── Frontend ────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./services/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ─── Collector (Celery Workers) ───────────────────────────────────────────────
+  collector:
+    build:
+      context: ./services/collector
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      <<: *common-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./services/collector:/app
+      - /dev/shm:/dev/shm
+    ipc: host
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
+    restart: unless-stopped
+
+  # ─── Processor (ML Pipeline) ─────────────────────────────────────────────────
+  processor:
+    build:
+      context: ./services/processor
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      <<: *common-env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/processor:/app
+      - huggingface_cache:/root/.cache/huggingface
+    command: celery -A app.celery_app worker --loglevel=info --queues=ml --concurrency=2
+    restart: unless-stopped
+
+  # ─── Collector-Playwright (L2 Celery Worker — solo pool, Playwright browsers) ──
+  collector-playwright:
+    build:
+      context: ./services/collector
+      dockerfile: Dockerfile.playwright
+    env_file: .env
+    environment:
+      <<: *common-env
+      PLAYWRIGHT_WORKER: "1"
+      BROWSER_POOL_SIZE: "2"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./services/collector:/app
+      - /dev/shm:/dev/shm
+    ipc: host
+    # --pool=solo: Playwright is not fork-safe; solo pool runs tasks sequentially
+    # in the main thread, which is fine because Playwright is async-internal.
+    # --queues=playwright: receives only tasks explicitly routed here (L2 tasks).
+    command: >
+      celery -A app.celery_app:celery_app worker
+      --loglevel=info --pool=solo --queues=playwright --concurrency=1
+    restart: unless-stopped
+
+  # ─── Beat (Celery Scheduler — exactly 1 replica) ─────────────────────────────
+  beat:
+    build:
+      context: ./services/collector
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      <<: *common-env
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A app.celery_app beat --loglevel=info
+    deploy:
+      replicas: 1
+    restart: unless-stopped
+
+  # ─── Flower (Celery Monitor) ──────────────────────────────────────────────────
+  flower:
+    image: mher/flower:2.0
+    env_file: .env
+    environment:
+      CELERY_BROKER_URL: ${REDIS_URL}
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    command: celery flower --broker=${REDIS_URL} --port=5555
+    restart: unless-stopped
+
+  # ─── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cat_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: cat_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cat_user -d cat_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ─── ClickHouse ───────────────────────────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8-alpine
+    environment:
+      CLICKHOUSE_USER: cat_user
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: cat_analytics
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./infrastructure/clickhouse/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    ports:
+      - "8123:8123"
+      - "9002:9000"
+    restart: unless-stopped
+
+  # ─── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  # ─── MinIO ────────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ─── MailHog (Dev email testing) ─────────────────────────────────────────────
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  redis_data:
+  minio_data:
+  huggingface_cache:
