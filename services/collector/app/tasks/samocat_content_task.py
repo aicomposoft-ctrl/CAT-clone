@@ -88,24 +88,26 @@ def collect_samocat_content(self, sku_platform_id: str) -> None:
 
     sp_id, sku_id, raw_product_id, org_id = row
 
-    # Validate product_id before any HTTP call
-    try:
-        product_id = _parse_product_id(raw_product_id)
-    except ValueError:
-        # NO_PRODUCT_ID — external_id is None or empty string
+    logger.info(
+        "collect_samocat_content: raw_product_id=%r for sku_platform %s",
+        raw_product_id,
+        sku_platform_id,
+    )
+
+    # Validate product_id before any HTTP call — accepts numeric IDs and slugs.
+    if not raw_product_id or not str(raw_product_id).strip():
         logger.info(
             "collect_samocat_content: NO_PRODUCT_ID for sku_platform %s — skipping",
             sku_platform_id,
         )
         return
-    except ScraperError as exc:
-        # PARSE_ERROR — product_id present but non-numeric
-        logger.warning(
-            "collect_samocat_content: invalid product_id for sku_platform %s: %s",
-            sku_platform_id,
-            exc,
-        )
-        return
+    product_id = str(raw_product_id).strip()
+
+    logger.info(
+        "collect_samocat_content: using product_id=%r (numeric=%s)",
+        product_id,
+        product_id.isdigit(),
+    )
 
     scraper = SamokatScraper(proxy_rotator=get_proxy_rotator())
 
