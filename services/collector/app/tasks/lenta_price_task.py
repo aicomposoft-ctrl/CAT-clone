@@ -1,32 +1,28 @@
 """
 Celery task: collect current price for a Lenta SKU.
 
+Delegates to ScraperRouter for adaptive L1→L2→L3 fallback.
 Inserts a new price_snapshots row on every run (append-only time series).
-Runs every 4 hours via Celery Beat.
-
-(sp_id, external_id, org_id) extracted as primitives within the first DB
-session to avoid DetachedInstanceError from lazy relationships after session
-close.
 
 Error handling:
   - NO_PRODUCT_ID:              external_id empty → silent skip
-  - PARSE_ERROR:                product_id not numeric → log warning, return
   - NOT_FOUND:                  product missing → log info, return
-  - RATE_LIMITED / API_UNAVAILABLE → self.retry() (max 3, exponential backoff)
+  - RATE_LIMITED / API_UNAVAILABLE / PARSE_ERROR → self.retry() (max 3)
+  - ALL_LEVELS_FAILED → self.retry() (max 3)
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
 
-from app.celery_app import celery_app
-from app.core.base_scraper import ScraperError
-from app.core.proxy import get_proxy_rotator
+import redis as redis_lib
+
+from app.celery_app import REDIS_URL, celery_app
+from app.core.base_scraper import DataType, PriceData, ScraperError
+from app.core.scraper_router import ScraperRouter
 from app.models import PriceSnapshot, SKUPlatform, SKU
-from app.scrapers.lenta import LentaScraper, _parse_product_id
 from app.tasks._db import get_db_session
 
 logger = logging.getLogger(__name__)
@@ -46,7 +42,7 @@ def collect_lenta_price(self, sku_platform_id: str) -> None:
     """
     with get_db_session() as db:
         row = (
-            db.query(SKUPlatform.id, SKUPlatform.external_id, SKU.org_id)
+            db.query(SKUPlatform.id, SKUPlatform.external_id, SKUPlatform.platform_id, SKU.org_id)
             .join(SKU, SKU.id == SKUPlatform.sku_id)
             .filter(SKUPlatform.id == uuid.UUID(sku_platform_id))
             .first()
@@ -58,46 +54,40 @@ def collect_lenta_price(self, sku_platform_id: str) -> None:
         )
         return
 
-    sp_id, raw_product_id, org_id = row
+    sp_id, raw_product_id, platform_id, org_id = row
 
-    # Validate product_id before any HTTP call
-    try:
-        product_id = _parse_product_id(raw_product_id)
-    except ValueError:
-        # NO_PRODUCT_ID — external_id is None or empty string
+    if not raw_product_id or not str(raw_product_id).strip():
         logger.info(
             "collect_lenta_price: NO_PRODUCT_ID for sku_platform %s — skipping",
             sku_platform_id,
         )
         return
-    except ScraperError as exc:
-        # PARSE_ERROR — product_id present but non-numeric
-        logger.warning(
-            "collect_lenta_price: invalid product_id for sku_platform %s: %s",
-            sku_platform_id,
-            exc,
-        )
-        return
-
-    scraper = LentaScraper(proxy_rotator=get_proxy_rotator())
-
-    try:
-        price_data = asyncio.run(scraper.collect_price(product_id))
-    except ScraperError as exc:
-        if exc.code == "NOT_FOUND":
-            logger.info(
-                "collect_lenta_price: product sku_platform=%s not found on Lenta — skipping",
-                sku_platform_id,
-            )
-            return
-        logger.warning(
-            "collect_lenta_price: ScraperError code=%s sku_platform=%s",
-            exc.code,
-            sku_platform_id,
-        )
-        raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+    product_id = str(raw_product_id).strip()
 
     with get_db_session() as db:
+        _redis = redis_lib.from_url(REDIS_URL, decode_responses=False)
+        router = ScraperRouter(db, redis_client=_redis)
+        try:
+            price_data: PriceData = router.collect(
+                platform_id=platform_id,
+                sku_id=product_id,
+                data_type=DataType.PRICE,
+                org_id=org_id,
+            )
+        except ScraperError as exc:
+            if exc.code == "NOT_FOUND":
+                logger.info(
+                    "collect_lenta_price: product sku_platform=%s not found — skipping",
+                    sku_platform_id,
+                )
+                return
+            logger.warning(
+                "collect_lenta_price: ScraperError code=%s sku_platform=%s",
+                exc.code,
+                sku_platform_id,
+            )
+            raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+
         db.add(
             PriceSnapshot(
                 id=uuid.uuid4(),

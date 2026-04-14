@@ -202,14 +202,27 @@ def get_browser_pool() -> BrowserPool:
     """
     Return the process-global BrowserPool.
 
+    In PLAYWRIGHT_WORKER=1 mode: lazily initialises on first call if the
+    worker_init signal fired before browser_pool was imported (e.g. because
+    celery_app.py imports it conditionally after the signal already fired).
+
     Raises:
         RuntimeError: if called outside a collector-playwright Celery worker.
     """
+    global _pool
     if _pool is None:
-        raise RuntimeError(
-            "BrowserPool not initialized — "
-            "is this running in the collector-playwright Celery worker?"
-        )
+        import os
+        if os.environ.get("PLAYWRIGHT_WORKER") == "1":
+            # Lazy init — ensures BrowserPool is available even if worker_init
+            # signal fired before this module was imported.
+            size = int(os.environ.get("BROWSER_POOL_SIZE", "2"))
+            logger.info("BrowserPool: lazy init triggered (size=%d)", size)
+            _init_pool_sync(size)
+        else:
+            raise RuntimeError(
+                "BrowserPool not initialized — "
+                "is this running in the collector-playwright Celery worker?"
+            )
     return _pool
 
 

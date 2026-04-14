@@ -87,11 +87,16 @@ celery_app.conf.update(
     enable_utc=True,
     worker_prefetch_multiplier=1,
     task_acks_late=True,
-    # Route Ozon tasks to the playwright queue — Ozon L1 (httpx) is blocked by
-    # anti-bot (403), so these must run in collector-playwright (BrowserPool
-    # available for L2 fallback).  All other tasks use the default queue.
+    # Route all scraping tasks to the playwright queue so BrowserPool (L2/L3
+    # fallback) is available for every platform.  The collector-playwright
+    # worker runs --pool=solo (fork-safe for Playwright) and processes only
+    # this queue.  The regular collector worker handles orchestrator/beat tasks
+    # that land in the default queue.
     task_routes={
+        "wb.*": {"queue": "playwright"},
         "ozon.*": {"queue": "playwright"},
+        "samocat.*": {"queue": "playwright"},
+        "lenta.*": {"queue": "playwright"},
     },
 )
 
