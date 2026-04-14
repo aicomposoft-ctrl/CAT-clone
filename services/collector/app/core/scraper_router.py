@@ -360,7 +360,21 @@ class ScraperRouter:
         if scraper.scraper_level == 0:
             return scraper.collect(sku_id, data_type)
 
-        # L1+ scrapers — async; run in a new event loop from the sync Celery worker
+        # L2/L3: Playwright browsers are bound to the BrowserPool's background loop.
+        # Use run_coroutine_threadsafe to schedule on that loop instead of creating
+        # a new one (which would cause "attached to different loop" asyncio errors).
+        if getattr(scraper, "scraper_level", 1) in (2, 3):
+            from app.core.browser_pool import _pool_loop
+            if _pool_loop is not None and _pool_loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(
+                    self._invoke_async(scraper, sku_id, data_type, platform_name),
+                    _pool_loop,
+                )
+                return fut.result(timeout=120)
+            # Pool loop not available — fall through to asyncio.run (will likely fail gracefully)
+            logger.warning("ScraperRouter: BrowserPool loop not available for L2/L3")
+
+        # L1 (and L2/L3 fallback): run in a fresh event loop
         return asyncio.run(self._invoke_async(scraper, sku_id, data_type, platform_name))
 
     @staticmethod

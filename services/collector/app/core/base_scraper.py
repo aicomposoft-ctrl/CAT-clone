@@ -141,8 +141,14 @@ class BaseScraper(ABC):
                 elif exc.response.status_code >= 500:
                     if attempt == max_retries - 1:
                         raise ScraperError("API_UNAVAILABLE", str(exc)) from exc
+                elif exc.response.status_code in (401, 403):
+                    # Anti-bot / auth challenge — signal ScraperRouter to try L2
+                    raise ScraperError(
+                        "ANTIBOT_BLOCK",
+                        f"HTTP {exc.response.status_code} — anti-bot or auth challenge",
+                    ) from exc
                 else:
-                    raise  # 4xx other than 429: don't retry
+                    raise  # other 4xx: don't retry
                 await asyncio.sleep(2 ** attempt)
             except (httpx.TransportError, httpx.TimeoutException) as exc:
                 last_exc = exc

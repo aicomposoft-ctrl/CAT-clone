@@ -213,19 +213,46 @@ def get_browser_pool() -> BrowserPool:
     return _pool
 
 
+_pool_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
 def _init_pool_sync(size: int = 2) -> None:
-    """Create and start the BrowserPool in a new event loop (worker_init context)."""
-    global _pool
-    _pool = BrowserPool(size=size)
-    # Start in a fresh event loop — worker_init runs before any tasks
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(_pool._start())
-    except Exception as exc:
-        logger.error("BrowserPool: failed to start: %s", exc)
-        _pool = None
-        raise
+    """
+    Create and start the BrowserPool in a dedicated background thread.
+
+    Playwright browsers are bound to the event loop that created them.
+    Running them in a background thread with a persistent loop avoids the
+    "attached to different loop" error that occurs when asyncio.run() in
+    Celery tasks creates a fresh loop per call.
+    """
+    import threading
+
+    global _pool, _pool_loop
+
+    started_event = threading.Event()
+    error_holder: list = []
+
+    def _thread_main():
+        global _pool, _pool_loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _pool_loop = loop
+        _pool = BrowserPool(size=size)
+        try:
+            loop.run_until_complete(_pool._start())
+            started_event.set()
+            loop.run_forever()  # keep loop alive for future use
+        except Exception as exc:
+            logger.error("BrowserPool: failed to start: %s", exc)
+            _pool = None
+            error_holder.append(exc)
+            started_event.set()
+
+    t = threading.Thread(target=_thread_main, daemon=True, name="browser-pool-loop")
+    t.start()
+    started_event.wait(timeout=60)  # wait up to 60s for browsers to launch
+    if error_holder:
+        raise error_holder[0]
 
 
 try:
