@@ -17,6 +17,7 @@ WORKDIR /app
 
 COPY requirements.txt requirements-playwright.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-playwright.txt
+RUN patchright install chromium --with-deps
 
 COPY app/ ./app/
 
