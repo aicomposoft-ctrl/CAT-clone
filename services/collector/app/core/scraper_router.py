@@ -180,6 +180,18 @@ class ScraperRouter:
 
             except ScraperError as exc:
                 last_error = exc
+                # L0 NOT_FOUND: product is not in the seller's API catalog.
+                # This is normal for brand-monitoring use cases where the token
+                # belongs to a different seller than the product owner.
+                # Fall through to L1/L2 which use public endpoints.
+                if level == "l0" and exc.code == "NOT_FOUND":
+                    logger.info(
+                        "ScraperRouter: level=l0 NOT_FOUND for %s sku=%s — "
+                        "not in seller catalog, trying public scraping",
+                        platform.name,
+                        sku_id,
+                    )
+                    continue
                 # L1 PARSE_ERROR: scraper couldn't handle the sku_id format (e.g. slug
                 # instead of numeric product_id). L2/L3 use URL templates, not the raw
                 # sku_id, so they may still work.

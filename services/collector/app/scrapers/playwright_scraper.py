@@ -21,7 +21,7 @@ import asyncio
 import json
 import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -194,10 +194,50 @@ class PlaywrightScraper:
                         # Non-fatal; continue to product page.
                         pass
 
+            # Yandex search warm-up: navigate to Yandex before the product page so the
+            # visit appears as organic search traffic.  Anti-bot systems check the Referer
+            # header and browser history — arriving from yandex.ru is much less suspicious
+            # than a direct headless request.
+            #
+            # Enable per platform via platform_config:
+            #   {"yandex_warmup": true, "yandex_search_query": "Агуша яблоко 90г ozon"}
+            #
+            # If yandex_search_query is omitted, the URL domain is used as the search hint.
+            _yandex_referer: Optional[str] = None
+            if self._platform_config.get("yandex_warmup"):
+                _search_q = self._platform_config.get(
+                    "yandex_search_query",
+                    f"{self._platform_name} {_root_url(url) or ''}".strip(),
+                )
+                _yandex_referer = f"https://yandex.ru/search/?text={quote_plus(_search_q)}"
+                try:
+                    await page.goto(
+                        "https://yandex.ru",
+                        wait_until="domcontentloaded",
+                        timeout=_LOAD_TIMEOUT_MS,
+                    )
+                    await asyncio.sleep(1.2)
+                    intercepted.clear()
+                    logger.debug(
+                        "PlaywrightScraper: Yandex warm-up complete for %s (referer=%s)",
+                        self._platform_name,
+                        _yandex_referer,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "PlaywrightScraper: Yandex warm-up failed for %s: %s — continuing",
+                        self._platform_name,
+                        exc,
+                    )
+                    _yandex_referer = None  # fall back to direct navigation
+
             # Navigate to actual product page
             try:
                 wait_mode = "domcontentloaded" if fresh_context else "networkidle"
-                await page.goto(url, wait_until=wait_mode, timeout=_LOAD_TIMEOUT_MS)
+                goto_kwargs: dict = {"wait_until": wait_mode, "timeout": _LOAD_TIMEOUT_MS}
+                if _yandex_referer:
+                    goto_kwargs["referer"] = _yandex_referer
+                await page.goto(url, **goto_kwargs)
                 # Give SPA hydration scripts a moment to populate product widgets.
                 await asyncio.sleep(1.8 if fresh_context else 1.2)
                 await self._ensure_page_materialized(page, url)
