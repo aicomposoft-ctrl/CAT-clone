@@ -225,13 +225,16 @@ class BrowserPool:
                 logger.warning("BrowserPool: failed evicting shared context %s: %s", key, exc)
 
     def _context_kwargs(self, profile_variant: str) -> dict:
+        # Chrome version MUST match the actual Chromium version in the container.
+        # patchright >=1.50 ships Chromium 1208 = Chrome 131.
+        # Mismatched UA vs real Chromium version is a strong bot signal for Akamai/Cloudflare.
         if profile_variant == "fresh":
             return {
                 "viewport": {"width": 1366, "height": 768},
                 "user_agent": (
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/121.0.0.0 Safari/537.36"
+                    "Chrome/131.0.0.0 Safari/537.36"
                 ),
                 "locale": "ru-RU",
                 "timezone_id": "Europe/Moscow",
@@ -242,7 +245,7 @@ class BrowserPool:
             "user_agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Safari/537.36"
+                "Chrome/131.0.0.0 Safari/537.36"
             ),
             "locale": "ru-RU",
             "timezone_id": "Europe/Moscow",
