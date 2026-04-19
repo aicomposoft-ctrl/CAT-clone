@@ -188,6 +188,18 @@ class WBSellerAPIScraper(BaseScraper):
             returned_nm,
             returned_title,
         )
+        # Validate that the API returned the card we asked for.
+        # The WB Content API may return the first card in the seller's catalog
+        # when the requested nm_id doesn't belong to this seller account.
+        try:
+            if int(returned_nm) != int(nm_id):
+                raise ScraperError(
+                    "NOT_FOUND",
+                    f"WB API returned nmID={returned_nm} instead of nm_id={nm_id} — "
+                    "card does not belong to this seller account",
+                )
+        except (TypeError, ValueError):
+            pass  # returned_nm is "unknown" — skip validation, proceed with card
 
         # Extract composition from characteristics array
         composition: Optional[str] = None

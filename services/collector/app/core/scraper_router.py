@@ -180,6 +180,17 @@ class ScraperRouter:
 
             except ScraperError as exc:
                 last_error = exc
+                # L1 PARSE_ERROR: scraper couldn't handle the sku_id format (e.g. slug
+                # instead of numeric product_id). L2/L3 use URL templates, not the raw
+                # sku_id, so they may still work.
+                if level == "l1" and exc.code == "PARSE_ERROR":
+                    logger.info(
+                        "ScraperRouter: level=l1 PARSE_ERROR for %s sku=%s — "
+                        "L1 cannot handle sku_id format, trying L2",
+                        platform.name,
+                        sku_id,
+                    )
+                    continue
                 if level == "l2" and exc.code in {"ANTIBOT_BLOCK", "PARSE_ERROR"}:
                     second_chance = self._maybe_retry_l2_adaptive(
                         scraper, exc, sku_id, data_type, platform.name, page_url
