@@ -55,7 +55,7 @@ Lenta and Samocat have no seller API; chain is L2 → L3.
 
 5. **`docker-compose.yml`**: `PLATFORM_SECRET_KEYS` explicitly exposed to `collector-playwright` environment.
 
-6. **`.env`**: `PLATFORM_SECRET_KEYS=YYJCDhOLxgfJ96W_bmCew1GrwwmDDfn_48KyYOv1N_8=` added (NOT committed — .env is gitignored).
+6. **`.env`**: `PLATFORM_SECRET_KEYS=<fernet-key>` added (NOT committed — .env is gitignored). Ask operator for the key value.
 
 ---
 
@@ -86,24 +86,27 @@ docker compose exec postgres psql -U cat_user cat_db -c \
   "SELECT sp.id, p.name, sp.external_id FROM sku_platforms sp JOIN platforms p ON p.id=sp.platform_id JOIN skus s ON s.id=sp.sku_id WHERE s.name ILIKE '%агуш%';"
 ```
 
-Then trigger each platform (replace UUID with actual):
+Then trigger each platform (replace UUID with actual). **Correct task names** use the `wb.` / `ozon.` / `lenta.` / `samocat.` prefix (not `cat.`):
 ```bash
 # WB
-docker compose exec collector-playwright celery -A app.celery_app call \
-  cat.collect_wb_content --args='["<wb_sku_platform_id>"]'
+docker compose exec collector-playwright celery -A app.celery_app.celery_app call \
+  wb.collect_content --args='["<wb_sku_platform_id>"]'
 
-# Ozon (already routes to playwright queue — can also use collector-playwright)
-docker compose exec collector-playwright celery -A app.celery_app call \
-  cat.collect_ozon_content --args='["<ozon_sku_platform_id>"]'
+# Ozon
+docker compose exec collector-playwright celery -A app.celery_app.celery_app call \
+  ozon.collect_content --args='["<ozon_sku_platform_id>"]'
 
 # Lenta
-docker compose exec collector-playwright celery -A app.celery_app call \
-  cat.collect_lenta_content --args='["<lenta_sku_platform_id>"]'
+docker compose exec collector-playwright celery -A app.celery_app.celery_app call \
+  lenta.collect_content --args='["<lenta_sku_platform_id>"]'
 
 # Samocat
-docker compose exec collector-playwright celery -A app.celery_app call \
-  cat.collect_samocat_content --args='["<samocat_sku_platform_id>"]'
+docker compose exec collector-playwright celery -A app.celery_app.celery_app call \
+  samocat.collect_content --args='["<samocat_sku_platform_id>"]'
 ```
+
+Or dispatch all monitored SKUs at once:
+`wb.collect_content_all`, `ozon.collect_content_all`, `samocat.collect_content_all`, `lenta.collect_content_all` (and `*_collect_prices_all` pairs).
 
 ### 4. Monitor progress
 
@@ -137,8 +140,38 @@ Content score should appear for the SKU after collection completes.
 
 ## Seller API credentials reference (DO NOT put raw tokens in code)
 
-WB Bearer token: `eyJhbGciOiJFUzI1NiIs...` (see .env history or ask user)
-Ozon: client_id=3922854, api_key=02d41f8b-dd24-4a2e-b141-fc1bcf689d49
-
-These are stored encrypted in DB. The `PLATFORM_SECRET_KEYS` Fernet key was used to encrypt them.
+WB Bearer token and Ozon (client_id/api_key) are stored encrypted in DB.
+Ask operator for raw values if re-encryption is needed.
+The `PLATFORM_SECRET_KEYS` Fernet key was used to encrypt them.
 **Do NOT re-insert them** — they're already in the DB.
+
+---
+
+## Cursor verification — 2026-04-19 (VPN off, per operator)
+
+**Environment:** `docker compose ps` — stack up (api, nginx, frontend, postgres, redis, `collector-playwright`, etc.).  
+**Worker refresh:** `docker compose up -d --force-recreate collector-playwright` so `PLATFORM_SECRET_KEYS` from `.env` is applied.  
+**Trigger:** all eight orchestrators: `wb|ozon|samocat|lenta` × (`collect_*_content_all`, `collect_*_prices_all`).  
+**SKU in DB:** one SKU `ad1eff66-e6be-4498-8214-29321e892ad6` («Фруктовое пюре Яблоко-банан-печенье 90г»), four `sku_platforms` rows (WB, Ozon, Лента, Самокат).
+
+### Outcome summary
+
+| Platform | Content | Price | Scraper levels observed | Notes |
+|----------|---------|-------|-------------------------|--------|
+| Wildberries | L0 `200` from Seller content API | L0 price `72800` | l0 | Logs: `ScraperRouter: collected ... (level=l0)`. **Data quality:** `content_scores.collected_title` for latest row is **not** the Agusha product (wrong card returned for `nm_id` / seller catalog). Needs catalog/token alignment review. |
+| Ozon | L2 success | L2 **2090.00** RUB | l2 | Logs: `collect_ozon_content: done ... scraper_level=2`, `collect_ozon_price: done ... scraper_level=2`. Seller L0 returned `404` on some seller endpoints; fallback path worked. |
+| Самокат | **FAIL** `ALL_LEVELS_FAILED` | **FAIL** `ALL_LEVELS_FAILED` | l2→l3 | Anti-bot / challenge on product URL; L3 `OpenAIAgentScraper` also `ANTIBOT_BLOCK`. |
+| Лента | **FAIL** `ALL_LEVELS_FAILED` (this run) | **FAIL** `ALL_LEVELS_FAILED` (this run) | l1 `401` → l2/l3 | Reasons in logs: `empty_response`, `geo_or_auth_block`. **Older** `price_snapshots` rows (e.g. L3, ~999.99) still in DB from prior runs — not updated this time. |
+
+### Pass/fail vs “key scenario” (content + price + visible in UI)
+
+- **Full 4/4 success:** no — Samokat and Lenta failed this run; WB L0 “works” but **wrong product** in stored title.
+- **Partial:** Ozon price + content pipeline **OK** (L2). WB price numeric from L0 **written**; content row **suspect**.
+- **UI:** not re-checked in browser here; API/DB show mixed data — recommend opening **Content** after fixing WB nm/seller mapping and Lenta/Samokat egress.
+
+### For Claude Code next steps
+
+1. Fix **handoff task names** (use `app.celery_app.celery_app` and `wb.collect_*`, not `cat.collect_*`) — partially corrected above.  
+2. Investigate **WB L0** returning wrong card for `844578103` (seller scope vs nm_id).  
+3. **Lenta / Samokat:** reproduce `geo_or_auth_block` vs handoff note (residential IP without VPN); may need session cookies, geo init, or stable RU egress.  
+4. Remove or redact raw secrets from this doc’s appendix before sharing externally.
