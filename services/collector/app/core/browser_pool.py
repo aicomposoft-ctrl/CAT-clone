@@ -44,18 +44,28 @@ class BrowserPool:
         self._playwright = None
         self._browsers: list = []  # list of playwright Browser objects
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._shared_contexts: dict[str, object] = {}
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def _start(self) -> None:
-        """Async initialisation — launch Playwright and `size` browser instances."""
+        """Async initialisation — launch Playwright/patchright and `size` browser instances."""
         try:
-            from playwright.async_api import async_playwright
-        except ImportError as exc:
-            raise RuntimeError(
-                "playwright package is not installed — "
-                "BrowserPool is only available in the collector-playwright service."
-            ) from exc
+            from patchright.async_api import async_playwright
+            logger.info("BrowserPool: using patchright (Runtime.enable CDP leak patched)")
+        except ImportError:
+            try:
+                from playwright.async_api import async_playwright
+                logger.warning(
+                    "BrowserPool: patchright not installed — falling back to playwright. "
+                    "CDP automation leak NOT patched. "
+                    "Install with: pip install patchright && patchright install chromium"
+                )
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Neither patchright nor playwright is installed — "
+                    "BrowserPool is only available in the collector-playwright service."
+                ) from exc
 
         self._semaphore = asyncio.Semaphore(self._size)
         self._playwright = await async_playwright().start()
@@ -73,6 +83,13 @@ class BrowserPool:
 
     async def _stop(self) -> None:
         """Async shutdown — close all browsers then stop Playwright."""
+        for key, context in list(self._shared_contexts.items()):
+            try:
+                await context.close()
+            except Exception as exc:
+                logger.warning("BrowserPool: error closing shared context %s: %s", key, exc)
+        self._shared_contexts.clear()
+
         for browser in self._browsers:
             try:
                 await browser.close()
@@ -109,6 +126,8 @@ class BrowserPool:
         proxy: Optional[dict] = None,
         geolocation: Optional[dict] = None,
         permissions: Optional[list] = None,
+        persistent_profile_key: Optional[str] = None,
+        profile_variant: str = "default",
     ) -> AsyncIterator:
         """
         Acquire a browser page from the pool.
@@ -140,16 +159,7 @@ class BrowserPool:
                 logger.warning("BrowserPool: browser disconnected — relaunching")
                 browser = await self._relaunch(browser)
 
-            context_kwargs: dict = {
-                "viewport": {"width": 1280, "height": 800},
-                "user_agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/122.0.0.0 Safari/537.36"
-                ),
-                "locale": "ru-RU",
-                "extra_http_headers": {"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8"},
-            }
+            context_kwargs = self._context_kwargs(profile_variant)
             if proxy:
                 context_kwargs["proxy"] = proxy
             if geolocation:
@@ -157,7 +167,22 @@ class BrowserPool:
             if permissions:
                 context_kwargs["permissions"] = permissions
 
-            context = await browser.new_context(**context_kwargs)
+            context = None
+            shared_key = None
+            if persistent_profile_key:
+                shared_key = f"{persistent_profile_key}|{proxy}|{geolocation}|{permissions}"
+                context = self._shared_contexts.get(shared_key)
+                if context is None:
+                    context = await browser.new_context(**context_kwargs)
+                    self._shared_contexts[shared_key] = context
+                    logger.info(
+                        "BrowserPool: created shared context for %s variant=%s",
+                        persistent_profile_key,
+                        profile_variant,
+                    )
+            else:
+                context = await browser.new_context(**context_kwargs)
+
             page = await context.new_page()
             # Stealth: remove webdriver property and navigator.plugins signature
             # that Ozon/WB anti-bot checks for headless detection.
@@ -171,9 +196,53 @@ class BrowserPool:
                 yield page
             finally:
                 try:
-                    await context.close()
+                    await page.close()
                 except Exception as exc:
-                    logger.warning("BrowserPool: error closing context: %s", exc)
+                    logger.warning("BrowserPool: error closing page: %s", exc)
+                if shared_key is None:
+                    try:
+                        await context.close()
+                    except Exception as exc:
+                        logger.warning("BrowserPool: error closing context: %s", exc)
+
+    def evict_shared_context(self, persistent_profile_key: str) -> None:
+        if _pool_loop is None or not _pool_loop.is_running():
+            return
+        victims = [key for key in self._shared_contexts if key.startswith(f"{persistent_profile_key}|")]
+        for key in victims:
+            context = self._shared_contexts.pop(key, None)
+            if context is None:
+                continue
+            future = asyncio.run_coroutine_threadsafe(context.close(), _pool_loop)
+            try:
+                future.result(timeout=10)
+            except Exception as exc:
+                logger.warning("BrowserPool: failed evicting shared context %s: %s", key, exc)
+
+    def _context_kwargs(self, profile_variant: str) -> dict:
+        if profile_variant == "fresh":
+            return {
+                "viewport": {"width": 1366, "height": 768},
+                "user_agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/121.0.0.0 Safari/537.36"
+                ),
+                "locale": "ru-RU",
+                "timezone_id": "Europe/Moscow",
+                "extra_http_headers": {"Accept-Language": "ru-RU,ru;q=0.95,en-US;q=0.8"},
+            }
+        return {
+            "viewport": {"width": 1280, "height": 800},
+            "user_agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
+            "locale": "ru-RU",
+            "timezone_id": "Europe/Moscow",
+            "extra_http_headers": {"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8"},
+        }
 
     async def _relaunch(self, old_browser) -> object:
         """Replace a crashed browser in self._browsers and return the new one."""

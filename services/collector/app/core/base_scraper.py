@@ -12,6 +12,13 @@ New in Sprint A:
   - `DataType` enum for use with unified `collect()` method
   - `ScrapedData` union type returned by `collect()`
   - `collect()` abstract method — unified entry point for ScraperRouter
+
+Anti-bot upgrade (anti-bot-http-upgrade feature):
+  - Subclasses set `_impersonate = "chrome131"` to enable curl_cffi TLS impersonation.
+  - When `_impersonate` is set, `_get()` uses curl_cffi AsyncSession instead of httpx.
+  - curl_cffi replicates Chrome 131 JA3/JA4/HTTP2 fingerprints, bypassing Akamai/Cloudflare
+    TLS-layer detection that blocks plain httpx.
+  - Scrapers without `_impersonate` (Lenta, Samocat) continue using httpx unchanged.
 """
 
 from __future__ import annotations
@@ -32,10 +39,22 @@ from app.core.proxy import ProxyRotator
 logger = logging.getLogger(__name__)
 
 _USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 ]
+
+# Sec-Ch-Ua headers matching Chrome 131 — required alongside TLS impersonation
+# to present a consistent browser identity to Akamai/Cloudflare header inspection.
+_CHROME131_SEC_HEADERS = {
+    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "Accept-Encoding": "gzip, deflate, br",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -87,10 +106,51 @@ class DataType(Enum):
 class ScraperError(Exception):
     """Domain error raised by scrapers with a machine-readable code."""
 
-    def __init__(self, code: str, message: str = "") -> None:
+    def __init__(self, code: str, message: str = "", *, details: Optional[dict] = None) -> None:
         self.code = code
         self.message = message
+        self.details = details or {}
         super().__init__(f"{code}: {message}")
+
+
+# ---------------------------------------------------------------------------
+# curl_cffi response adapter — bridges curl_cffi → httpx-compatible interface
+# ---------------------------------------------------------------------------
+
+class _CffiResponseAdapter:
+    """
+    Wraps a curl_cffi response object to expose the same interface as httpx.Response.
+
+    BaseScraper.with_retry() catches httpx.HTTPStatusError — raise_for_status()
+    must preserve this contract.  We raise httpx.HTTPStatusError with a minimal
+    stub request object to avoid crashing httpx internals (request=None would).
+    """
+
+    def __init__(self, resp) -> None:
+        self._resp = resp
+        self.status_code: int = resp.status_code
+        self.headers = resp.headers
+
+    def json(self):
+        return self._resp.json()
+
+    @property
+    def text(self) -> str:
+        return self._resp.text
+
+    @property
+    def content(self) -> bytes:
+        return self._resp.content
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            # Build a minimal stub request so httpx internals don't crash on None
+            stub_request = httpx.Request("GET", str(getattr(self._resp, "url", "https://unknown")))
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}",
+                request=stub_request,
+                response=self,  # type: ignore[arg-type]
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +161,7 @@ class BaseScraper(ABC):
     platform: str
     rate_limit: float  # requests per second
     scraper_level: int = 1  # 0=seller API, 1=L1, 2=L2, 3=L3
+    _impersonate: Optional[str] = None  # set to "chrome131" in WB/Ozon scrapers
 
     def __init__(self, proxy_rotator: ProxyRotator) -> None:
         self._proxy = proxy_rotator
@@ -114,12 +175,38 @@ class BaseScraper(ABC):
         return ua
 
     async def _get(self, url: str, **kwargs) -> httpx.Response:
-        """Async GET with rate limiting, proxy rotation, and user-agent rotation."""
+        """
+        Async GET with rate limiting, proxy rotation, and user-agent rotation.
+
+        When `_impersonate` is set on the subclass, routes through curl_cffi
+        AsyncSession with Chrome 131 TLS/JA3/HTTP2 impersonation.  Proxy is
+        passed per-request (not frozen at session init) so ProxyRotator works.
+        """
         async with self._semaphore:
             await asyncio.sleep(1.0 / self.rate_limit)
             proxy = self._proxy.next()
             headers = kwargs.pop("headers", {})
             headers.setdefault("User-Agent", self._next_ua())
+
+            if self._impersonate:
+                try:
+                    from curl_cffi.requests import AsyncSession
+                except ImportError as exc:
+                    raise ScraperError(
+                        "API_UNAVAILABLE", "curl_cffi not installed"
+                    ) from exc
+                proxies = {"http": proxy, "https": proxy} if proxy else None
+                merged_headers = {**_CHROME131_SEC_HEADERS, **headers}
+                async with AsyncSession(impersonate=self._impersonate) as session:
+                    resp = await session.get(
+                        url,
+                        headers=merged_headers,
+                        proxies=proxies,
+                        timeout=30,
+                        **kwargs,
+                    )
+                return _CffiResponseAdapter(resp)
+
             async with httpx.AsyncClient(proxy=proxy, timeout=30.0, follow_redirects=True) as client:
                 return await client.get(url, headers=headers, **kwargs)
 

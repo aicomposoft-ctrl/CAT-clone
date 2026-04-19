@@ -10,6 +10,7 @@ Image URLs validated against CDN allowlist before fetching (SSRF guard).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -18,8 +19,6 @@ from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 import httpx
-
-import asyncio
 
 from app.core.base_scraper import (
     BaseScraper,
@@ -56,6 +55,7 @@ class WildberriesScraper(BaseScraper):
 
     platform = "Wildberries"
     rate_limit = 1.0  # req/sec
+    _impersonate = "chrome131"  # curl_cffi TLS impersonation to bypass Cloudflare
 
     # WB migrated *.wb.ru → *.wildberries.ru in April 2025. Try legacy first
     # (still resolves for many clients); fall back to new domain on connection failure.
@@ -180,6 +180,7 @@ class WildberriesScraper(BaseScraper):
         return reviews
 
     def collect(self, sku_id: str, data_type: DataType) -> ScrapedData:
+        """Sync entry for ScraperRouter / tasks that expect BaseScraper.collect."""
         if data_type == DataType.CONTENT:
             return asyncio.run(self.collect_content(sku_id))
         if data_type == DataType.PRICE:
@@ -188,7 +189,7 @@ class WildberriesScraper(BaseScraper):
             return asyncio.run(self.collect_stock(sku_id))
         if data_type == DataType.REVIEWS:
             return asyncio.run(self.collect_reviews(sku_id))
-        raise ValueError(f"Unknown DataType: {data_type}")
+        raise ScraperError("PARSE_ERROR", f"Unknown DataType: {data_type}")
 
     # ── Private helpers ────────────────────────────────────────────────────
 
