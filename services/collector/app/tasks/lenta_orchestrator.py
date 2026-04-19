@@ -42,8 +42,8 @@ from app.tasks.lenta_stock_task import collect_lenta_stock
 
 logger = logging.getLogger(__name__)
 
-# DB seed uses Cyrillic "Лента"; older seeds may have Latin "Lenta" — match both.
-_LT_PLATFORM_NAMES = ["Лента", "Lenta"]
+# seed.py uses Cyrillic "Лента"; migrations use Latin "Lenta" — match both.
+_LT_PLATFORM_NAMES = ("Lenta", "Лента")
 
 
 def _load_lenta_sku_platform_ids(db) -> list[str]:

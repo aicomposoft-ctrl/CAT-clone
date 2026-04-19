@@ -11,6 +11,7 @@ Price values are returned as integer kopeks and divided by 100 to yield Decimal 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import date
@@ -18,8 +19,6 @@ from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 import httpx
-
-import asyncio
 
 from app.core.base_scraper import (
     BaseScraper,
@@ -43,12 +42,6 @@ _SK_IMAGE_CDN_RE = re.compile(
     r"^https://cdn\.samokat\.ru/[A-Za-z0-9/_\-\.]+\.(jpg|jpeg|png|webp)$"
 )
 
-# Web browser UA used for slug resolution (page fetch) — different from mobile app UA
-_USER_AGENT_WEB = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-)
-
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
@@ -57,18 +50,18 @@ _USER_AGENT_WEB = (
 
 def _parse_product_id(raw: str | None) -> str:
     """
-    Accept either a numeric product ID (e.g. ``"12345"``) or a URL slug
-    (e.g. ``"fruktovoe-pyure-jablochnoe-100g"``).
+    Validate that ``product_id`` is a non-empty numeric string.
 
-    Numeric IDs are returned as-is.
-    Slugs are normalised and returned as-is — the API will return 404 if the
-    slug is not resolvable; the caller should handle NOT_FOUND gracefully.
-
+    Returns the stripped string if valid.
     Raises ``ValueError("NO_PRODUCT_ID")`` if ``raw`` is None or blank.
+    Raises ``ScraperError("PARSE_ERROR")`` if ``raw`` contains non-digit characters.
     """
     if not raw or not raw.strip():
         raise ValueError("NO_PRODUCT_ID")
-    return raw.strip()
+    stripped = raw.strip()
+    if not stripped.isdigit():
+        raise ScraperError("PARSE_ERROR", f"product_id not numeric: {stripped!r}")
+    return stripped
 
 
 def _kopeks_to_decimal(kopeks: int | str) -> Decimal:
@@ -307,6 +300,7 @@ class SamokatScraper(BaseScraper):
         return result
 
     def collect(self, sku_id: str, data_type: DataType) -> ScrapedData:
+        """Sync entry for ScraperRouter / tasks that expect BaseScraper.collect."""
         if data_type == DataType.CONTENT:
             return asyncio.run(self.collect_content(sku_id))
         if data_type == DataType.PRICE:
@@ -315,7 +309,7 @@ class SamokatScraper(BaseScraper):
             return asyncio.run(self.collect_stock(sku_id))
         if data_type == DataType.REVIEWS:
             return asyncio.run(self.collect_reviews(sku_id))
-        raise ValueError(f"Unknown DataType: {data_type}")
+        raise ScraperError("PARSE_ERROR", f"Unknown DataType: {data_type}")
 
     # ── Private helpers ────────────────────────────────────────────────────
 
@@ -331,21 +325,18 @@ class SamokatScraper(BaseScraper):
             ScraperError("RATE_LIMITED")    — 429/403 after retries exhausted
             ScraperError("API_UNAVAILABLE") — 5xx or network error after retries
         """
-        # If product_id is a slug (not numeric), try to resolve it to a numeric
-        # ID via the Samokat web search API before hitting the items endpoint.
-        resolved_id = product_id
-        if not product_id.isdigit():
-            resolved_id = await self._resolve_slug(product_id)
-
-        url = f"{self._BASE_API}/items/{resolved_id}"
+        url = f"{self._BASE_API}/items/{product_id}"
 
         async def _fetch():
             resp = await self._get(url, headers=self._HEADERS)
             if resp.status_code == 404:
                 raise ScraperError(
                     "NOT_FOUND",
-                    f"product_id={product_id} (resolved={resolved_id}) not found",
+                    f"product_id={product_id} not found",
                 )
+            # raise_for_status() raises httpx.HTTPStatusError for any non-2xx
+            # response — with_retry() catches that and retries 429/5xx with
+            # exponential backoff before raising ScraperError.
             resp.raise_for_status()
             return resp.json()
 
@@ -355,41 +346,3 @@ class SamokatScraper(BaseScraper):
             raise
         except Exception as exc:
             raise ScraperError("API_UNAVAILABLE", str(exc)) from exc
-
-    async def _resolve_slug(self, slug: str) -> str:
-        """
-        Resolve a URL slug to a numeric Samokat product ID.
-
-        Samokat's website stores the numeric id in the page's __NEXT_DATA__ JSON
-        or in the canonical product meta.  We try a lightweight text/html fetch
-        and extract the first occurrence of ``"itemId":<digits>`` or
-        ``"id":<digits>`` adjacent to the slug.
-
-        Falls back to the original slug if resolution fails — the caller will
-        then get NOT_FOUND from the items endpoint, which is the correct outcome.
-        """
-        page_url = f"https://samokat.ru/product/{slug}"
-        try:
-            resp = await self._get(page_url, headers={
-                "User-Agent": _USER_AGENT_WEB,
-                "Accept": "text/html",
-            })
-            if resp.status_code != 200:
-                logger.debug("Samokat slug resolver: HTTP %s for %s", resp.status_code, slug)
-                return slug
-            text = resp.text
-            # __NEXT_DATA__ typically contains "itemId":12345 or "id":12345
-            for pattern in (
-                r'"itemId"\s*:\s*(\d+)',
-                r'"productId"\s*:\s*(\d+)',
-                r'"id"\s*:\s*(\d+)',
-            ):
-                m = re.search(pattern, text)
-                if m:
-                    numeric_id = m.group(1)
-                    logger.info("Samokat: resolved slug %r → %s", slug, numeric_id)
-                    return numeric_id
-            logger.warning("Samokat: could not extract numeric ID from page for slug %r", slug)
-        except Exception as exc:
-            logger.debug("Samokat slug resolver failed for %r: %s", slug, exc)
-        return slug  # fall through to items endpoint; 404 is expected

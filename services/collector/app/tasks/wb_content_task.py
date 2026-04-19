@@ -32,9 +32,7 @@ from datetime import date, datetime, timezone
 
 import httpx
 
-import redis as redis_lib
-
-from app.celery_app import REDIS_URL, celery_app
+from app.celery_app import celery_app
 from app.core.base_scraper import ContentData, DataType, ScraperError
 from app.core.proxy import get_proxy_rotator
 from app.core.sanitize import sanitize
@@ -42,6 +40,8 @@ from app.core.scraper_router import ScraperRouter
 from app.models import ContentScore, SKUPlatform, SKU
 from app.scrapers.wildberries import _WB_IMAGE_CDN_RE
 from app.tasks._db import get_db_session
+from app.tasks._redis import get_redis_client
+from app.tasks._retry_policy import should_retry_scrape_error
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +150,7 @@ def collect_wb_content(self, sku_platform_id: str) -> None:
                 SKUPlatform.id,
                 SKUPlatform.sku_id,
                 SKUPlatform.external_id,
+                SKUPlatform.url,
                 SKUPlatform.platform_id,
                 SKU.org_id,
             )
@@ -162,21 +163,21 @@ def collect_wb_content(self, sku_platform_id: str) -> None:
         logger.warning("collect_wb_content: sku_platform %s not found — skipping", sku_platform_id)
         return
 
-    sp_id, sku_id, nm_id, platform_id, org_id = row
+    sp_id, sku_id, nm_id, page_url, platform_id, org_id = row
 
     if not nm_id:
         logger.info("collect_wb_content: NO_NM_ID for sku_platform %s — skipping", sku_platform_id)
         return
 
     with get_db_session() as db:
-        _redis = redis_lib.from_url(REDIS_URL, decode_responses=False)
-        router = ScraperRouter(db, redis_client=_redis)
+        router = ScraperRouter(db, redis_client=get_redis_client())
         try:
             content = router.collect(
                 platform_id=platform_id,
                 sku_id=nm_id,
                 data_type=DataType.CONTENT,
                 org_id=org_id,
+                page_url=page_url,
             )
         except ScraperError as exc:
             if exc.code == "NOT_FOUND":
@@ -185,6 +186,8 @@ def collect_wb_content(self, sku_platform_id: str) -> None:
                 )
                 return
             logger.warning("collect_wb_content: ScraperError code=%s nm_id=%s", exc.code, nm_id)
+            if not should_retry_scrape_error(exc):
+                raise
             raise self.retry(exc=exc, countdown=2 ** self.request.retries)
 
         scraper_level: int | None = getattr(content, "scraper_level", None)

@@ -57,6 +57,9 @@ services:
       - "3000:3000"
     environment:
       REACT_APP_API_URL: http://localhost:8000
+    volumes:
+      # Override baked-in nginx conf: SPA + proxy /api/ + /s3/ (survives compose restart)
+      - ./services/frontend/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - api
     restart: unless-stopped
@@ -69,6 +72,11 @@ services:
     env_file: .env
     environment:
       <<: *common-env
+      SCRAPER_DISABLE_L3: ${SCRAPER_DISABLE_L3:-1}
+      L3_PROVIDER: ${L3_PROVIDER:-anthropic}
+      SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
+      SCRAPER_PROXY_USER: ${SCRAPER_PROXY_USER:-}
+      SCRAPER_PROXY_PASS: ${SCRAPER_PROXY_PASS:-}
     depends_on:
       redis:
         condition: service_healthy
@@ -108,6 +116,12 @@ services:
       <<: *common-env
       PLAYWRIGHT_WORKER: "1"
       BROWSER_POOL_SIZE: "2"
+      PLATFORM_SECRET_KEYS: ${PLATFORM_SECRET_KEYS:-}
+      SCRAPER_DISABLE_L3: ${SCRAPER_DISABLE_L3:-1}
+      L3_PROVIDER: ${L3_PROVIDER:-anthropic}
+      SCRAPER_PROXY_URL: ${SCRAPER_PROXY_URL:-}
+      SCRAPER_PROXY_USER: ${SCRAPER_PROXY_USER:-}
+      SCRAPER_PROXY_PASS: ${SCRAPER_PROXY_PASS:-}
     depends_on:
       redis:
         condition: service_healthy

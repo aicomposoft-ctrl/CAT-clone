@@ -3,7 +3,7 @@ Reference upload routes for CAT API.
 
 Mounted on /api/v1/skus/{sku_id}/reference via main.py:
   POST   /api/v1/skus/{sku_id}/reference/image       — upload reference image → 202
-  PATCH  /api/v1/skus/{sku_id}/reference/text        — set description + composition → 202
+  PATCH  /api/v1/skus/{sku_id}/reference/text        — set description + composition → 202 (+ echo of saved fields)
   GET    /api/v1/skus/{sku_id}/reference/image-url   — get presigned URL → 200
 
 All business logic delegated to reference_service.

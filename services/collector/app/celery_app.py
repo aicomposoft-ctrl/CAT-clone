@@ -28,6 +28,7 @@ _REQUIRED_SECRETS = ["POSTGRES_URL", "REDIS_URL"]
 _OPTIONAL_SECRETS_WITH_FEATURES = {
     "PLATFORM_SECRET_KEYS": "L0 Seller API token encryption",
     "ANTHROPIC_API_KEY": "L3 AgentScraper Claude API",
+    "OPENAI_API_KEY": "L3 OpenAIAgentScraper API",
 }
 
 
@@ -87,11 +88,13 @@ celery_app.conf.update(
     enable_utc=True,
     worker_prefetch_multiplier=1,
     task_acks_late=True,
-    # Route Ozon tasks to the playwright queue — Ozon L1 (httpx) is blocked by
-    # anti-bot (403), so these must run in collector-playwright (BrowserPool
-    # available for L2 fallback).  All other tasks use the default queue.
+    # Route anti-bot-prone marketplace tasks to the playwright queue so L2/L3
+    # fallback is available via BrowserPool in collector-playwright.
     task_routes={
         "ozon.*": {"queue": "playwright"},
+        "wb.*": {"queue": "playwright"},
+        "samocat.*": {"queue": "playwright"},
+        "lenta.*": {"queue": "playwright"},
     },
 )
 

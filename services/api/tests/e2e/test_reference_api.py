@@ -300,7 +300,11 @@ async def test_upload_text_202(client, db_session):
         headers=_auth(user),
     )
     assert resp.status_code == 202
-    assert resp.json()["sku_id"] == str(sku.id)
+    body = resp.json()
+    assert body["sku_id"] == str(sku.id)
+    assert body["reference_description"] == "Индейка охл."
+    assert body["reference_composition"] == "Индейка 100%"
+    assert "updated_at" in body
 
 
 @pytest.mark.asyncio

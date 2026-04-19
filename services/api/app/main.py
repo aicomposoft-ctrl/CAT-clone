@@ -53,6 +53,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     validate_required_secrets()
     logger.info("CAT API starting up")
+    try:
+        from app.core.minio_client import MinioClient
+
+        await MinioClient.from_env().ensure_bucket_exists()
+        logger.info("MinIO bucket %s is available", MinioClient.BUCKET)
+    except Exception as exc:
+        logger.warning(
+            "MinIO bucket bootstrap failed (%s) — reference image upload may return 503 until MinIO is reachable",
+            exc,
+        )
     yield
     logger.info("CAT API shutting down")
 

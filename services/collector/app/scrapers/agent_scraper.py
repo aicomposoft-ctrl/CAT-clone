@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -33,6 +34,7 @@ from uuid import UUID
 import anthropic
 from pydantic import BaseModel, ValidationError
 
+from app.core.anti_bot import classify_page_state, classify_parse_failure
 from app.core.base_scraper import (
     ContentData,
     DataType,
@@ -54,8 +56,8 @@ _CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 _MAX_TOKENS = 512
 # Redis cache TTL (seconds)
 _CACHE_TTL = 3600
-# Per-org daily L3 request limit
-_DAILY_LIMIT = 100
+# Per-org daily L3 request limit (configurable via env)
+_DAILY_LIMIT = int(os.getenv("AGENT_DAILY_LIMIT", "100"))
 # Playwright page-load timeout (ms)
 _LOAD_TIMEOUT_MS = 30_000
 
@@ -141,6 +143,7 @@ class AgentScraper:
         self._redis = redis_client
         self._pool = browser_pool
         self._claude = anthropic.AsyncAnthropic()
+        self._attempt_kind: str = "l3"
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -161,10 +164,7 @@ class AgentScraper:
             ScraperError("ANTIBOT_BLOCK")           — anti-bot page detected.
             ScraperError("AGENT_EXTRACTION_FAILED") — Claude response invalid.
         """
-        # 1. Enforce per-org daily rate limit
-        self._check_rate_limit()
-
-        # 2. Check cache
+        # 1. Check cache first — cache hits must NOT consume daily L3 budget.
         url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
         cache_key = f"agent_result:{self._platform_id}:{url_hash}:{data_type.value}"
         cached = self._redis.get(cache_key)
@@ -175,8 +175,12 @@ class AgentScraper:
             )
             return self._deserialize(cached, data_type)
 
-        # 3. Load page and capture ARIA snapshot
+        # 2. Load page and capture ARIA snapshot.
+        # If anti-bot blocks before Claude call, we should not burn L3 quota.
         aria_text = await self._get_aria_snapshot(url)
+
+        # 3. Enforce per-org daily rate limit only when we are about to call Claude.
+        self._check_rate_limit()
 
         # 4. Call Claude API
         raw_json = await self._call_claude(aria_text, data_type)
@@ -248,38 +252,110 @@ class AgentScraper:
         URL is never logged — it may contain signed query parameters or session tokens.
         Error messages use the platform name and scraper level instead.
         """
-        async with self._pool.acquire() as page:
+        async with self._pool.acquire(
+            proxy=self._build_proxy(),
+            persistent_profile_key=f"l3:{self._platform_name}",
+        ) as page:
             try:
                 await page.goto(url, wait_until="networkidle", timeout=_LOAD_TIMEOUT_MS)
             except Exception as exc:
                 raise ScraperError(
                     "API_UNAVAILABLE",
                     f"AgentScraper (L3/{self._platform_name}): page load failed: {exc}",
+                    details={
+                        "platform": self._platform_name,
+                        "reason": "empty_response",
+                        "attempt_kind": self._attempt_kind,
+                    },
                 ) from exc
 
             # Anti-bot heuristic
-            if await self._is_blocked(page):
+            assessment = await self._assess_page(page)
+            if assessment.is_blocked:
                 raise ScraperError(
                     "ANTIBOT_BLOCK",
                     f"AgentScraper (L3/{self._platform_name}): anti-bot page detected",
+                    details={
+                        "platform": self._platform_name,
+                        "reason": assessment.reason,
+                        "confidence": assessment.confidence,
+                        "attempt_kind": self._attempt_kind,
+                        "proxy_enabled": bool(self._build_proxy()),
+                    },
                 )
 
+            # Playwright Python compatibility:
+            # - locator(...).aria_snapshot() is unavailable in older versions.
+            # - use page.accessibility.snapshot() first, then graceful fallbacks.
+            aria_text: str | None = None
             try:
-                aria_text: str = await page.locator("body").aria_snapshot()
-            except Exception as exc:
-                raise ScraperError(
-                    "API_UNAVAILABLE",
-                    f"AgentScraper (L3/{self._platform_name}): aria_snapshot() failed: {exc}",
-                ) from exc
+                ax = await page.accessibility.snapshot(interesting_only=True)
+                if ax is not None:
+                    aria_text = json.dumps(ax, ensure_ascii=False)
+            except Exception:
+                aria_text = None
+
+            if not aria_text:
+                try:
+                    body_text = await page.inner_text("body")
+                    if body_text:
+                        aria_text = body_text
+                except Exception:
+                    aria_text = None
+
+            if not aria_text:
+                try:
+                    aria_text = await page.content()
+                except Exception as exc:
+                    raise ScraperError(
+                        "API_UNAVAILABLE",
+                        f"AgentScraper (L3/{self._platform_name}): page snapshot failed: {exc}",
+                        details={
+                            "platform": self._platform_name,
+                            "reason": classify_parse_failure(body="", html=""),
+                            "attempt_kind": self._attempt_kind,
+                        },
+                    ) from exc
 
         return aria_text[:_ARIA_MAX_CHARS]
 
-    async def _is_blocked(self, page) -> bool:
-        """Return True if the page looks like a CAPTCHA or access-denied page."""
-        title = (await page.title()).lower()
-        url = page.url.lower()
-        block_signals = ("captcha", "blocked", "доступ запрещён", "access denied", "robot")
-        return any(sig in title or sig in url for sig in block_signals)
+    async def _assess_page(self, page):
+        try:
+            title = await page.title()
+        except Exception:
+            title = ""
+        try:
+            url = page.url
+        except Exception:
+            url = ""
+        try:
+            body = await page.inner_text("body")
+        except Exception:
+            body = ""
+        try:
+            html = await page.content()
+        except Exception:
+            html = ""
+        return classify_page_state(
+            platform_name=self._platform_name,
+            url=url,
+            title=title,
+            body=body,
+            html=html,
+        )
+
+    def _build_proxy(self) -> Optional[dict]:
+        proxy_url = os.environ.get("SCRAPER_PROXY_URL")
+        if not proxy_url:
+            return None
+        proxy: dict = {"server": proxy_url}
+        user = os.environ.get("SCRAPER_PROXY_USER")
+        password = os.environ.get("SCRAPER_PROXY_PASS")
+        if user:
+            proxy["username"] = user
+        if password:
+            proxy["password"] = password
+        return proxy
 
     # ── Claude API call ────────────────────────────────────────────────────
 

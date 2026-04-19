@@ -18,7 +18,10 @@ Note on instantiation:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
+from urllib.parse import urlparse
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -33,6 +36,7 @@ from app.core.base_scraper import (
     ScraperError,
     StockData,
 )
+from app.core.anti_bot import AntiBotAssessment, classify_page_state, classify_parse_failure
 from app.core.browser_pool import BrowserPool
 from app.core.sanitize import sanitize
 
@@ -78,6 +82,7 @@ class PlaywrightScraper:
         self._selectors: dict = selectors or {}
         self._pool = browser_pool
         self._platform_config: dict = platform_config or {}
+        self._attempt_kind: str = "shared_warm"
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -98,6 +103,16 @@ class PlaywrightScraper:
             ScraperError("API_UNAVAILABLE") — page failed to load / timeout.
             ScraperError("ANTIBOT_BLOCK")  — anti-bot page detected.
         """
+        return await self.collect_with_strategy(url, data_type)
+
+    async def collect_with_strategy(
+        self,
+        url: str,
+        data_type: DataType,
+        *,
+        fresh_context: bool = False,
+        attempt_kind: str = "shared_warm",
+    ) -> ScrapedData:
         proxy = self._build_proxy()
 
         # Geolocation context — required for geo-gated platforms (e.g. Samokat).
@@ -105,8 +120,13 @@ class PlaywrightScraper:
         geolocation = self._platform_config.get("geolocation")
         permissions = ["geolocation"] if geolocation else None
 
+        self._attempt_kind = attempt_kind
         async with self._pool.acquire(
-            proxy=proxy, geolocation=geolocation, permissions=permissions
+            proxy=proxy,
+            geolocation=geolocation,
+            permissions=permissions,
+            persistent_profile_key=None if fresh_context else f"l2:{self._platform_name}",
+            profile_variant="fresh" if fresh_context else "default",
         ) as page:
             intercepted: list[dict] = []
 
@@ -115,9 +135,21 @@ class PlaywrightScraper:
             async def _on_response(response) -> None:
                 try:
                     ct = response.headers.get("content-type", "")
-                    if response.status == 200 and "application/json" in ct:
-                        body = await response.json()
-                        intercepted.append({"url": response.url, "body": body})
+                    if 200 <= response.status < 300:
+                        body = None
+                        if "application/json" in ct:
+                            body = await response.json()
+                        else:
+                            # Some marketplaces return JSON payloads with wrong
+                            # content-type (e.g. text/plain). Parse best-effort.
+                            text = (await response.text() or "").strip()
+                            if text.startswith("{") or text.startswith("["):
+                                try:
+                                    body = json.loads(text)
+                                except Exception:
+                                    body = None
+                        if body is not None:
+                            intercepted.append({"url": response.url, "body": body})
                 except Exception:
                     pass  # best-effort; malformed JSON is silently dropped
 
@@ -150,10 +182,25 @@ class PlaywrightScraper:
                         geo_init_url,
                         exc,
                     )
+            else:
+                # Generic warm-up: hit platform root first to establish cookies/session.
+                root = _root_url(url)
+                if root:
+                    try:
+                        await page.goto(root, wait_until="domcontentloaded", timeout=_LOAD_TIMEOUT_MS)
+                        await asyncio.sleep(1.0)
+                        intercepted.clear()
+                    except Exception:
+                        # Non-fatal; continue to product page.
+                        pass
 
             # Navigate to actual product page
             try:
-                await page.goto(url, wait_until="networkidle", timeout=_LOAD_TIMEOUT_MS)
+                wait_mode = "domcontentloaded" if fresh_context else "networkidle"
+                await page.goto(url, wait_until=wait_mode, timeout=_LOAD_TIMEOUT_MS)
+                # Give SPA hydration scripts a moment to populate product widgets.
+                await asyncio.sleep(1.8 if fresh_context else 1.2)
+                await self._ensure_page_materialized(page, url)
             except Exception as exc:
                 await self._save_debug_screenshot(page, url)
                 raise ScraperError(
@@ -162,11 +209,19 @@ class PlaywrightScraper:
                 ) from exc
 
             # Anti-bot heuristic: look for CAPTCHA / access denied indicators
-            if await self._is_blocked(page):
+            assessment = await self._assess_page(page)
+            if assessment.is_blocked:
                 await self._save_debug_screenshot(page, url)
                 raise ScraperError(
                     "ANTIBOT_BLOCK",
                     f"PlaywrightScraper: anti-bot page detected at {url}",
+                    details={
+                        "platform": self._platform_name,
+                        "reason": assessment.reason,
+                        "confidence": assessment.confidence,
+                        "attempt_kind": attempt_kind,
+                        "proxy_enabled": bool(proxy),
+                    },
                 )
 
             # 1. Try network interception
@@ -190,10 +245,19 @@ class PlaywrightScraper:
                 return result
 
             # Nothing worked
+            page_text = await _page_text(page)
+            page_html = await _page_html(page)
+            parse_reason = classify_parse_failure(body=page_text, html=page_html)
             await self._save_debug_screenshot(page, url)
             raise ScraperError(
                 "PARSE_ERROR",
                 f"PlaywrightScraper: could not extract {data_type.value} from {url}",
+                details={
+                    "platform": self._platform_name,
+                    "reason": parse_reason,
+                    "attempt_kind": attempt_kind,
+                    "proxy_enabled": bool(proxy),
+                },
             )
 
     # ── Backward-compat stubs (nm_id interface) ────────────────────────────
@@ -275,6 +339,12 @@ class PlaywrightScraper:
         Returns None (not raises) if selectors are absent or data not found.
         """
         try:
+            # Many marketplaces keep canonical product data in JSON-LD / inline
+            # script blobs; try that first before brittle CSS selectors.
+            json_result = await self._parse_embedded_json(page, data_type)
+            if json_result is not None:
+                return json_result
+
             if data_type == DataType.CONTENT:
                 return await self._dom_content(page)
             if data_type == DataType.PRICE:
@@ -293,11 +363,31 @@ class PlaywrightScraper:
 
         title = await _text(page, title_sel)
         if not title:
+            title = await _attr(page, "meta[property='og:title']", "content")
+        if not title:
+            title = await _text(page, "h1")
+        if not title:
+            raw_title = await page.title()
+            title = _clean_page_title(raw_title)
+        if not title:
             return None
 
         description = await _text(page, desc_sel) or ""
+        if not description:
+            description = await _attr(page, "meta[name='description']", "content") or ""
+            if not description:
+                description = await _attr(page, "meta[property='og:description']", "content") or ""
+
         composition = await _text(page, comp_sel)
+        if not composition:
+            page_text = await _page_text(page)
+            composition = _extract_composition_from_text(page_text)
+
         image_url = await _attr(page, img_sel, "src")
+        if not image_url:
+            image_url = await _attr(page, "meta[property='og:image']", "content")
+        if not image_url:
+            image_url = await _attr(page, "meta[name='twitter:image']", "content")
 
         return ContentData(
             title=sanitize(title, 500),
@@ -313,6 +403,24 @@ class PlaywrightScraper:
 
         price_text = await _text(page, price_sel)
         if not price_text:
+            # Generic fallbacks for marketplaces where selectors drift often.
+            price_text = await _text(page, "[itemprop='price']")
+        if not price_text:
+            for selector in _fallback_price_selectors(self._platform_name):
+                price_text = await _text(page, selector)
+                if price_text:
+                    break
+        if not price_text:
+            price_text = await _attr(page, "meta[itemprop='price']", "content")
+        if not price_text:
+            price_text = await _attr(page, "meta[property='product:price:amount']", "content")
+        if not price_text:
+            body_text = await _page_text(page)
+            price_text = _extract_price_like_text(body_text)
+        if not price_text:
+            page_html = await _page_html(page)
+            price_text = _extract_price_from_html(page_html)
+        if not price_text:
             return None
 
         price = _parse_decimal(price_text)
@@ -320,6 +428,8 @@ class PlaywrightScraper:
             return None
 
         orig_text = await _text(page, orig_sel)
+        if not orig_text:
+            orig_text = await _attr(page, "meta[property='product:original_price:amount']", "content")
         original_price = _parse_decimal(orig_text) if orig_text else price
         promo_label = sanitize(await _text(page, promo_sel), 100) if promo_sel else None
 
@@ -340,26 +450,98 @@ class PlaywrightScraper:
         in_stock_sel = self._selectors.get("in_stock")
         qty_sel = self._selectors.get("stock_qty")
 
-        if not in_stock_sel and not qty_sel:
-            return None
-
         in_stock_text = await _text(page, in_stock_sel) if in_stock_sel else None
         qty_text = await _text(page, qty_sel) if qty_sel else None
 
+        page_text = (await _page_text(page)).lower()
+        if "нет в наличии" in page_text or "раскупили" in page_text or "out of stock" in page_text:
+            return StockData(in_stock=False, total_qty=0)
+        if qty_text is None:
+            m = re.search(r"(\d{1,4})\s*шт", page_text)
+            if m:
+                qty_text = m.group(1)
+
         # Heuristic: presence of the in-stock selector element = in stock
-        in_stock = in_stock_text is not None
+        in_stock = (in_stock_text is not None) or ("в наличии" in page_text) or ("available" in page_text)
         qty = int(_parse_decimal(qty_text) or 0) if qty_text else (1 if in_stock else 0)
 
         return StockData(in_stock=in_stock, total_qty=qty)
 
+    async def _parse_embedded_json(
+        self,
+        page,
+        data_type: DataType,
+    ) -> Optional[ScrapedData]:
+        """
+        Parse JSON-LD and common inline JSON blobs from script tags.
+        """
+        scripts = await page.eval_on_selector_all(
+            "script",
+            "els => els.map(e => e.textContent || '').filter(Boolean).slice(0, 120)",
+        )
+
+        for raw in scripts:
+            text = (raw or "").strip()
+            if not text:
+                continue
+
+            candidates: list[object] = []
+            parsed = _try_parse_json_blob(text)
+            if parsed is not None:
+                candidates.append(parsed)
+
+            m = re.search(r"__NEXT_DATA__\\s*=\\s*(\\{.*?\\})\\s*;", text, flags=re.DOTALL)
+            if m:
+                parsed_next = _try_parse_json_blob(m.group(1))
+                if parsed_next is not None:
+                    candidates.append(parsed_next)
+
+            for body in candidates:
+                if data_type == DataType.PRICE:
+                    result = _try_extract_price(body)
+                elif data_type == DataType.CONTENT:
+                    result = _try_extract_content(body)
+                elif data_type == DataType.STOCK:
+                    result = _try_extract_stock(body)
+                else:
+                    result = None
+                if result is not None:
+                    return result
+        return None
+
     # ── Anti-bot detection ─────────────────────────────────────────────────
 
-    async def _is_blocked(self, page) -> bool:
-        """Return True if the page looks like a CAPTCHA or access-denied page."""
-        title = (await page.title()).lower()
-        url = page.url.lower()
-        block_signals = ("captcha", "blocked", "доступ запрещён", "access denied", "robot")
-        return any(sig in title or sig in url for sig in block_signals)
+    async def _assess_page(self, page) -> AntiBotAssessment:
+        try:
+            title = await page.title()
+        except Exception:
+            title = ""
+        try:
+            url = page.url
+        except Exception:
+            url = ""
+        body = await _page_text(page)
+        html = await _page_html(page)
+        return classify_page_state(
+            platform_name=self._platform_name,
+            url=url,
+            title=title,
+            body=body,
+            html=html,
+        )
+
+    async def _ensure_page_materialized(self, page, url: str) -> None:
+        """
+        Best-effort fallback for pages that initially render blank in headless mode.
+        """
+        body = (await _page_text(page)).strip()
+        if len(body) >= 24:
+            return
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=_LOAD_TIMEOUT_MS)
+            await asyncio.sleep(1.5)
+        except Exception:
+            return
 
     # ── Debug screenshot ───────────────────────────────────────────────────
 
@@ -399,10 +581,11 @@ class PlaywrightScraper:
                     ContentLength=len(screenshot),
                 )
                 logger.info(
-                    "PlaywrightScraper: debug screenshot → s3://%s/%s (url=%s)",
+                    "PlaywrightScraper: debug screenshot → s3://%s/%s (url=%s attempt=%s)",
                     _DEBUG_BUCKET,
                     key,
                     url,
+                    self._attempt_kind,
                 )
             except Exception as s3_exc:
                 logger.warning(
@@ -637,3 +820,116 @@ def _find_first(d: dict, keys: tuple) -> object:
         if k in d:
             return d[k]
     return None
+
+
+def _try_parse_json_blob(text: str) -> Optional[object]:
+    text = text.strip()
+    if not text:
+        return None
+    if not (text.startswith("{") or text.startswith("[")):
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def _clean_page_title(title: str) -> Optional[str]:
+    if not title:
+        return None
+    cleaned = re.split(r"\s+[|\-]\s+", title, maxsplit=1)[0].strip()
+    return cleaned or None
+
+
+async def _page_text(page) -> str:
+    try:
+        return (await page.inner_text("body", timeout=_SELECTOR_TIMEOUT_MS)) or ""
+    except Exception:
+        return ""
+
+
+async def _page_html(page) -> str:
+    try:
+        return await page.content()
+    except Exception:
+        return ""
+
+
+def _extract_price_like_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    # Example matches: "1 299 ₽", "999,90 руб", "1299.00 ₽"
+    m = re.search(r"(\d[\d\s]{0,9}(?:[.,]\d{1,2})?)\s*(?:₽|руб)", text, flags=re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1)
+
+
+def _extract_price_from_html(html: str) -> Optional[str]:
+    if not html:
+        return None
+    patterns = (
+        r'"(?:price|finalPrice|currentPrice|sale_price|salePriceU|discountPrice|regularPrice)"\s*:\s*(?:\{[^{}]{0,160}?"value"\s*:\s*)?"?(?P<v>\d+(?:[.,]\d{1,2})?)',
+        r'"amount"\s*:\s*"?(?P<v>\d+(?:[.,]\d{1,2})?)',
+        r'"offers"\s*:\s*\{[^{}]{0,240}?"price"\s*:\s*"?(?P<v>\d+(?:[.,]\d{1,2})?)',
+        r'data-(?:price|product-price|current-price)\s*=\s*"(?P<v>\d+(?:[.,]\d{1,2})?)"',
+    )
+    for pattern in patterns:
+        m = re.search(pattern, html, flags=re.IGNORECASE)
+        if m:
+            return m.group("v")
+    return None
+
+
+def _extract_composition_from_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    m = re.search(
+        r"(?:состав|ingredients)\s*[:\-]\s*(.{10,600})",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None
+    value = re.split(r"\n{2,}|Отзывы|Характеристики|Описание", m.group(1), maxsplit=1)[0]
+    value = re.sub(r"\s+", " ", value).strip()
+    return value or None
+
+
+def _fallback_price_selectors(platform_name: str) -> tuple[str, ...]:
+    name = (platform_name or "").lower()
+    if "wildberries" in name:
+        return (
+            ".price-block__final-price",
+            "[class*='final-price']",
+            "[data-link*='price']",
+        )
+    if "ozon" in name:
+        return (
+            "[data-widget='webPrice'] span",
+            "[data-widget*='price'] span",
+            "[class*='price']",
+        )
+    if "самокат" in name or "samocat" in name:
+        return (
+            "[data-testid*='price']",
+            "[class*='Price']",
+            "[class*='price']",
+        )
+    if "лента" in name or "lenta" in name:
+        return (
+            ".price-main__value",
+            ".price__value",
+            "[class*='price']",
+        )
+    return ()
+
+
+def _root_url(url: str) -> Optional[str]:
+    try:
+        p = urlparse(url)
+        if not p.scheme or not p.netloc:
+            return None
+        return f"{p.scheme}://{p.netloc}/"
+    except Exception:
+        return None

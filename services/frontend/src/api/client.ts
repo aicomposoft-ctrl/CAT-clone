@@ -11,9 +11,10 @@
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
 
+// Do NOT set default Content-Type: it breaks multipart uploads (reference image, bulk CSV).
+// Axios sets application/json automatically for plain object bodies.
 const apiClient = axios.create({
   baseURL: '/api/v1',
-  headers: { 'Content-Type': 'application/json' },
   timeout: 30000,
 })
 
@@ -22,6 +23,14 @@ apiClient.interceptors.request.use((config) => {
   const token = useAuthStore.getState().accessToken
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    const h = config.headers
+    if (h && typeof (h as { delete?: (k: string) => void }).delete === 'function') {
+      ;(h as { delete: (k: string) => void }).delete('Content-Type')
+    } else {
+      delete (config.headers as Record<string, unknown>)['Content-Type']
+    }
   }
   return config
 })

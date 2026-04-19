@@ -38,11 +38,14 @@ from datetime import datetime, timezone
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.celery_app import celery_app
-from app.core.base_scraper import ScraperError
+from app.core.base_scraper import DataType, ScraperError
 from app.core.proxy import get_proxy_rotator
+from app.core.scraper_router import ScraperRouter
 from app.models import ContentScore, SKUPlatform, SKU
-from app.scrapers.samocat import SamokatScraper, _download_image_async, _parse_product_id
+from app.scrapers.samocat import _download_image_async
 from app.tasks._db import get_db_session
+from app.tasks._redis import get_redis_client
+from app.tasks._retry_policy import should_retry_scrape_error
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,8 @@ def collect_samocat_content(self, sku_platform_id: str) -> None:
                 SKUPlatform.id,
                 SKUPlatform.sku_id,
                 SKUPlatform.external_id,
+                SKUPlatform.url,
+                SKUPlatform.platform_id,
                 SKU.org_id,
             )
             .join(SKU, SKU.id == SKUPlatform.sku_id)
@@ -86,7 +91,7 @@ def collect_samocat_content(self, sku_platform_id: str) -> None:
         )
         return
 
-    sp_id, sku_id, raw_product_id, org_id = row
+    sp_id, sku_id, raw_product_id, page_url, platform_id, org_id = row
 
     logger.info(
         "collect_samocat_content: raw_product_id=%r for sku_platform %s",
@@ -109,35 +114,47 @@ def collect_samocat_content(self, sku_platform_id: str) -> None:
         product_id.isdigit(),
     )
 
-    scraper = SamokatScraper(proxy_rotator=get_proxy_rotator())
-
-    async def _fetch_content_and_image():
-        """Single event loop for content fetch + image download (avoids two asyncio.run calls)."""
-        c = await scraper.collect_content(product_id)
-        # ScraperError from collect_content propagates out — do not catch here.
-        img: bytes | None = None
-        if c.image_url:
-            try:
-                img = await _download_image_async(c.image_url, get_proxy_rotator().next())
-            except Exception:  # noqa: BLE001
-                pass  # failure logged below after asyncio.run returns
-        return c, img
-
-    try:
-        content, image_bytes = asyncio.run(_fetch_content_and_image())
-    except ScraperError as exc:
-        if exc.code == "NOT_FOUND":
-            logger.info(
-                "collect_samocat_content: product sku_platform=%s not found on Samocat — skipping",
+    with get_db_session() as db:
+        router = ScraperRouter(db, redis_client=get_redis_client())
+        try:
+            content = router.collect(
+                platform_id=platform_id,
+                sku_id=product_id,
+                data_type=DataType.CONTENT,
+                org_id=org_id,
+                page_url=page_url,
+            )
+        except ScraperError as exc:
+            if exc.code == "NOT_FOUND":
+                logger.info(
+                    "collect_samocat_content: product sku_platform=%s not found on Samocat — skipping",
+                    sku_platform_id,
+                )
+                return
+            logger.warning(
+                "collect_samocat_content: ScraperError code=%s sku_platform=%s",
+                exc.code,
                 sku_platform_id,
             )
-            return
-        logger.warning(
-            "collect_samocat_content: ScraperError code=%s sku_platform=%s",
-            exc.code,
-            sku_platform_id,
-        )
-        raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+            if not should_retry_scrape_error(exc):
+                raise
+            raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+        scraper_level: int | None = getattr(content, "scraper_level", None)
+
+    async def _fetch_image():
+        """Single event loop for content fetch + image download (avoids two asyncio.run calls)."""
+        img: bytes | None = None
+        if content.image_url:
+            try:
+                img = await _download_image_async(content.image_url, get_proxy_rotator().next())
+            except Exception:  # noqa: BLE001
+                pass  # failure logged below after asyncio.run returns
+        return img
+
+    try:
+        image_bytes = asyncio.run(_fetch_image())
+    except Exception:  # noqa: BLE001
+        image_bytes = None
 
     # Upload image to MinIO — non-fatal if this fails
     s3_key: str | None = None
@@ -172,6 +189,7 @@ def collect_samocat_content(self, sku_platform_id: str) -> None:
                 collected_description=content.description,
                 collected_composition=content.composition,
                 collected_image_url=s3_key,
+                scraper_level=scraper_level,
                 created_at=now_utc,
             )
             .on_conflict_do_update(
@@ -181,9 +199,14 @@ def collect_samocat_content(self, sku_platform_id: str) -> None:
                     "collected_description": content.description,
                     "collected_composition": content.composition,
                     "collected_image_url": s3_key,
+                    "scraper_level": scraper_level,
                 },
             )
         )
         db.execute(stmt)
 
-    logger.info("collect_samocat_content: done sku_platform=%s", sku_platform_id)
+    logger.info(
+        "collect_samocat_content: done sku_platform=%s scraper_level=%s",
+        sku_platform_id,
+        scraper_level,
+    )

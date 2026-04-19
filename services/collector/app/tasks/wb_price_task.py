@@ -23,13 +23,13 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-import redis as redis_lib
-
-from app.celery_app import REDIS_URL, celery_app
+from app.celery_app import celery_app
 from app.core.base_scraper import DataType, ScraperError
 from app.core.scraper_router import ScraperRouter
 from app.models import PriceSnapshot, SKUPlatform, SKU
 from app.tasks._db import get_db_session
+from app.tasks._redis import get_redis_client
+from app.tasks._retry_policy import should_retry_scrape_error
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ def collect_wb_price(self, sku_platform_id: str) -> None:
             db.query(
                 SKUPlatform.id,
                 SKUPlatform.external_id,
+                SKUPlatform.url,
                 SKUPlatform.platform_id,
                 SKU.org_id,
             )
@@ -66,27 +67,29 @@ def collect_wb_price(self, sku_platform_id: str) -> None:
         logger.warning("collect_wb_price: sku_platform %s not found — skipping", sku_platform_id)
         return
 
-    sp_id, nm_id, platform_id, org_id = row
+    sp_id, nm_id, page_url, platform_id, org_id = row
 
     if not nm_id:
         logger.info("collect_wb_price: NO_NM_ID for sku_platform %s — skipping", sku_platform_id)
         return
 
     with get_db_session() as db:
-        _redis = redis_lib.from_url(REDIS_URL, decode_responses=False)
-        router = ScraperRouter(db, redis_client=_redis)
+        router = ScraperRouter(db, redis_client=get_redis_client())
         try:
             price_data = router.collect(
                 platform_id=platform_id,
                 sku_id=nm_id,
                 data_type=DataType.PRICE,
                 org_id=org_id,
+                page_url=page_url,
             )
         except ScraperError as exc:
             if exc.code == "NOT_FOUND":
                 logger.info("collect_wb_price: product nm_id=%s not found on WB — skipping", nm_id)
                 return
             logger.warning("collect_wb_price: ScraperError code=%s nm_id=%s", exc.code, nm_id)
+            if not should_retry_scrape_error(exc):
+                raise
             raise self.retry(exc=exc, countdown=2 ** self.request.retries)
 
         scraper_level: int | None = getattr(price_data, "scraper_level", None)

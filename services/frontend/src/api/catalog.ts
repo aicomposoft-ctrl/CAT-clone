@@ -71,6 +71,11 @@ export const skusApi = {
     return { items: r.data.items, total: r.data.total }
   },
 
+  get: async (id: string): Promise<SKU> => {
+    const r = await apiClient.get<SKU>(`/skus/${id}`)
+    return r.data
+  },
+
   create: async (data: {
     brand_id: string
     name: string
@@ -123,11 +128,42 @@ export const platformsApi = {
   },
 }
 
-// Rewrite MinIO presigned URLs to go through the Vite /s3 proxy.
-// MinIO generates URLs with http://localhost:9000 which is unreachable from
-// the browser when served via Codespaces or any remote dev URL.
-function rewriteMinioUrl(url: string): string {
-  return url.replace(/^https?:\/\/localhost:9000/, '/s3')
+const MINIO_BUCKET_REFERENCES = 'cat-references'
+
+/**
+ * Presigned URLs: use as-is when they already target host MinIO on :9000 (published in docker-compose).
+ * Rewriting through /s3 can break SigV4 if proxy Host/path differs; direct URL is reliable locally.
+ * For internal host "minio" or other :9000 hosts, use same-origin /s3 proxy.
+ */
+export function rewriteMinioUrl(url: string): string {
+  if (!url) return url
+  try {
+    const u = new URL(url)
+    if (
+      (u.hostname === 'localhost' || u.hostname === '127.0.0.1') &&
+      u.port === '9000'
+    ) {
+      return url
+    }
+    const port = u.port || (u.protocol === 'https:' ? '443' : '80')
+    if (u.hostname === 'minio' || port === '9000') {
+      return `/s3${u.pathname}${u.search}`
+    }
+  } catch {
+    /* ignore */
+  }
+  return url
+}
+
+/** DB stores S3 object key under bucket cat-references, not a full URL. */
+export function referenceStorageKeyToImageSrc(stored: string | null): string | null {
+  if (!stored) return null
+  if (/^https?:\/\//i.test(stored)) return rewriteMinioUrl(stored)
+  const key = stored.replace(/^\/+/, '')
+  if (key.startsWith(`${MINIO_BUCKET_REFERENCES}/`)) {
+    return `/s3/${key}`
+  }
+  return `/s3/${MINIO_BUCKET_REFERENCES}/${key}`
 }
 
 // ── SKU Reference ────────────────────────────────────────────────────────
@@ -136,6 +172,15 @@ export interface SKUReference {
   reference_image_url: string | null
   reference_description: string | null
   reference_composition: string | null
+}
+
+/** PATCH /skus/{id}/reference/text — 202 body (echo of saved row). */
+export interface ReferenceTextPatchResponse {
+  sku_id: string
+  embedding_task_ids: Record<string, string | null | undefined>
+  reference_description: string | null
+  reference_composition: string | null
+  updated_at: string
 }
 
 export const referenceApi = {
@@ -165,8 +210,12 @@ export const referenceApi = {
   updateText: async (skuId: string, data: {
     reference_description?: string | null
     reference_composition?: string | null
-  }): Promise<void> => {
-    await apiClient.patch(`/skus/${skuId}/reference/text`, data)
+  }): Promise<ReferenceTextPatchResponse> => {
+    const r = await apiClient.patch<ReferenceTextPatchResponse>(
+      `/skus/${skuId}/reference/text`,
+      data,
+    )
+    return r.data
   },
 }
 

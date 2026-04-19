@@ -35,11 +35,14 @@ from datetime import datetime, timezone
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.celery_app import celery_app
-from app.core.base_scraper import ScraperError
+from app.core.base_scraper import DataType, ScraperError
 from app.core.proxy import get_proxy_rotator
+from app.core.scraper_router import ScraperRouter
 from app.models import ContentScore, SKUPlatform, SKU
-from app.scrapers.ozon import OzonScraper, _OZ_IMAGE_CDN_RE, _download_image_async, _parse_item_id
+from app.scrapers.ozon import _OZ_IMAGE_CDN_RE, _download_image_async
 from app.tasks._db import get_db_session
+from app.tasks._redis import get_redis_client
+from app.tasks._retry_policy import should_retry_scrape_error
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +73,8 @@ def collect_ozon_content(self, sku_platform_id: str) -> None:
                 SKUPlatform.id,
                 SKUPlatform.sku_id,
                 SKUPlatform.external_id,
+                SKUPlatform.url,
+                SKUPlatform.platform_id,
                 SKU.org_id,
             )
             .join(SKU, SKU.id == SKUPlatform.sku_id)
@@ -83,41 +88,31 @@ def collect_ozon_content(self, sku_platform_id: str) -> None:
         )
         return
 
-    sp_id, sku_id, raw_item_id, org_id = row
+    sp_id, sku_id, item_id, page_url, platform_id, org_id = row
 
-    # Validate item_id before any HTTP call
-    try:
-        item_id = _parse_item_id(raw_item_id)
-    except ValueError:
-        # NO_ITEM_ID — external_id is None or empty string
-        logger.info(
-            "collect_ozon_content: NO_ITEM_ID for sku_platform %s — skipping", sku_platform_id
-        )
-        return
-    except ScraperError as exc:
-        # PARSE_ERROR — item_id present but non-numeric
-        logger.warning(
-            "collect_ozon_content: invalid item_id %r for sku_platform %s: %s",
-            raw_item_id,
-            sku_platform_id,
-            exc,
-        )
+    if not item_id:
+        logger.info("collect_ozon_content: NO_ITEM_ID for sku_platform %s — skipping", sku_platform_id)
         return
 
-    scraper = OzonScraper(proxy_rotator=get_proxy_rotator())
-
-    try:
-        content = asyncio.run(scraper.collect_content(item_id))
-    except ScraperError as exc:
-        if exc.code == "NOT_FOUND":
-            logger.info(
-                "collect_ozon_content: product item_id=%s not found on Ozon — skipping", item_id
+    with get_db_session() as db:
+        router = ScraperRouter(db, redis_client=get_redis_client())
+        try:
+            content = router.collect(
+                platform_id=platform_id,
+                sku_id=item_id,
+                data_type=DataType.CONTENT,
+                org_id=org_id,
+                page_url=page_url,
             )
-            return
-        logger.warning(
-            "collect_ozon_content: ScraperError code=%s item_id=%s", exc.code, item_id
-        )
-        raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+        except ScraperError as exc:
+            if exc.code == "NOT_FOUND":
+                logger.info("collect_ozon_content: product item_id=%s not found on Ozon — skipping", item_id)
+                return
+            logger.warning("collect_ozon_content: ScraperError code=%s item_id=%s", exc.code, item_id)
+            if not should_retry_scrape_error(exc):
+                raise
+            raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+        scraper_level: int | None = getattr(content, "scraper_level", None)
 
     # Download main image and upload to MinIO — non-fatal if this fails
     s3_key: str | None = None
@@ -153,6 +148,7 @@ def collect_ozon_content(self, sku_platform_id: str) -> None:
                 collected_description=content.description,
                 collected_composition=content.composition,
                 collected_image_url=s3_key,
+                scraper_level=scraper_level,
                 created_at=now_utc,
             )
             .on_conflict_do_update(
@@ -162,9 +158,10 @@ def collect_ozon_content(self, sku_platform_id: str) -> None:
                     "collected_description": content.description,
                     "collected_composition": content.composition,
                     "collected_image_url": s3_key,
+                    "scraper_level": scraper_level,
                 },
             )
         )
         db.execute(stmt)
 
-    logger.info("collect_ozon_content: done item_id=%s", item_id)
+    logger.info("collect_ozon_content: done item_id=%s scraper_level=%s", item_id, scraper_level)

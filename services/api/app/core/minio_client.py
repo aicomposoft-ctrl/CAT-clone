@@ -92,6 +92,32 @@ class MinioClient:
             aws_secret_access_key=self._secret_key,
         )
 
+    async def ensure_bucket_exists(self) -> None:
+        """
+        Create the references bucket if missing.
+
+        Fresh MinIO has no buckets; PutObject without bucket → 503 (S3_UPLOAD_FAILED) in API.
+        """
+        from botocore.exceptions import ClientError
+
+        try:
+            async with self._make_client() as s3:
+                try:
+                    await s3.head_bucket(Bucket=self.BUCKET)
+                    return
+                except ClientError:
+                    pass
+                try:
+                    await s3.create_bucket(Bucket=self.BUCKET)
+                    logger.info("Created MinIO bucket %s", self.BUCKET)
+                except ClientError as e:
+                    code = e.response.get("Error", {}).get("Code", "")
+                    if code not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+                        raise
+        except Exception as exc:
+            logger.error("ensure_bucket_exists failed: %s", exc)
+            raise
+
     def validate_image(self, content: bytes, filename: str, content_type: str) -> tuple[str, str]:
         """
         Validate image upload. Returns (extension, mime_type) on success.
@@ -122,6 +148,7 @@ class MinioClient:
 
     async def upload(self, s3_key: str, content: bytes, content_type: str) -> None:
         """Upload bytes to MinIO. Raises RuntimeError if upload fails."""
+        await self.ensure_bucket_exists()
         try:
             async with self._make_client() as s3:
                 await s3.put_object(
@@ -155,6 +182,7 @@ class MinioClient:
 
     async def presign(self, s3_key: str, expires: int = PRESIGNED_TTL) -> str:
         """Generate a presigned GET URL. Raises RuntimeError if MinIO is unavailable."""
+        await self.ensure_bucket_exists()
         try:
             async with self._make_client() as s3:
                 url = await s3.generate_presigned_url(

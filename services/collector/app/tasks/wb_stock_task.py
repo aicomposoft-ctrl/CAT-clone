@@ -26,13 +26,12 @@ import logging
 import uuid
 from datetime import date, datetime, timezone
 
-import redis as redis_lib
-
-from app.celery_app import REDIS_URL, celery_app
+from app.celery_app import celery_app
 from app.core.base_scraper import DataType, ScraperError
 from app.core.scraper_router import ScraperRouter
 from app.models import ContentScore, SKUPlatform, SKU
 from app.tasks._db import get_db_session
+from app.tasks._redis import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +56,7 @@ def collect_wb_stock(self, sku_platform_id: str) -> None:
             db.query(
                 SKUPlatform.id,
                 SKUPlatform.external_id,
+                SKUPlatform.url,
                 SKUPlatform.platform_id,
                 SKU.org_id,
             )
@@ -69,21 +69,21 @@ def collect_wb_stock(self, sku_platform_id: str) -> None:
         logger.warning("collect_wb_stock: sku_platform %s not found — skipping", sku_platform_id)
         return
 
-    sp_id, nm_id, platform_id, org_id = row
+    sp_id, nm_id, page_url, platform_id, org_id = row
 
     if not nm_id:
         logger.info("collect_wb_stock: NO_NM_ID for sku_platform %s — skipping", sku_platform_id)
         return
 
     with get_db_session() as db:
-        _redis = redis_lib.from_url(REDIS_URL, decode_responses=False)
-        router = ScraperRouter(db, redis_client=_redis)
+        router = ScraperRouter(db, redis_client=get_redis_client())
         try:
             stock_data = router.collect(
                 platform_id=platform_id,
                 sku_id=nm_id,
                 data_type=DataType.STOCK,
                 org_id=org_id,
+                page_url=page_url,
             )
         except ScraperError as exc:
             if exc.code == "NOT_FOUND":

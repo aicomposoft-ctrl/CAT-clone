@@ -147,15 +147,24 @@ async def upload_reference_text(
         fields_to_invalidate.append("comp")
 
     if not updates:
-        return ReferenceTextUploadResponse(sku_id=sku_id, embedding_task_ids={})
+        await db.refresh(sku)
+        return ReferenceTextUploadResponse(
+            sku_id=sku_id,
+            embedding_task_ids={},
+            reference_description=sku.reference_description,
+            reference_composition=sku.reference_composition,
+            updated_at=sku.updated_at,
+        )
 
     # 2. Invalidate stale embeddings before DB update
     redis = await _get_redis()
     await _invalidate_embedding(redis, sku_id, *fields_to_invalidate)
 
-    # 3. Persist to DB and flush before Celery dispatch
+    # 3. Persist to DB, then re-read row so response matches committed state (avoids stale ORM)
     await SKURepository.update(db, sku, **updates)
-    await db.flush()
+    fresh = await SKURepository.get_by_id_and_org(db, sku_id, org_id)
+    if fresh is None:
+        raise LookupError("SKU_NOT_FOUND")
 
     # 4. Dispatch text embedding tasks (async, best-effort)
     if data.reference_description is not None:
@@ -163,7 +172,13 @@ async def upload_reference_text(
     if data.reference_composition is not None:
         task_ids["composition"] = _dispatch_text_task(sku_id, "comp", data.reference_composition)
 
-    return ReferenceTextUploadResponse(sku_id=sku_id, embedding_task_ids=task_ids)
+    return ReferenceTextUploadResponse(
+        sku_id=sku_id,
+        embedding_task_ids=task_ids,
+        reference_description=fresh.reference_description,
+        reference_composition=fresh.reference_composition,
+        updated_at=fresh.updated_at,
+    )
 
 
 async def get_presigned_url(

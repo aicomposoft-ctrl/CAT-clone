@@ -126,6 +126,18 @@ async def list_skus(
     return await catalog_service.list_skus(db, user.org_id, filters, limit, cursor)
 
 
+@sku_router.get("/{sku_id}", response_model=SKUResponse)
+async def get_sku(
+    sku_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SKUResponse:
+    try:
+        return await catalog_service.get_sku(db, user.org_id, sku_id)
+    except LookupError as exc:
+        raise _domain_error(exc) from exc
+
+
 @sku_router.post("", response_model=SKUResponse, status_code=status.HTTP_201_CREATED)
 async def create_sku(
     body: SKUCreateRequest,

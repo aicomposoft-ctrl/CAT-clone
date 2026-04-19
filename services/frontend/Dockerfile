@@ -29,13 +29,17 @@ RUN printf "server {\n\
         proxy_set_header Host \$host;\n\
         proxy_set_header X-Real-IP \$remote_addr;\n\
         proxy_read_timeout 120s;\n\
-        client_max_body_size 50m;\n\
+        proxy_send_timeout 120s;\n\
+        proxy_connect_timeout 10s;\n\
+        client_max_body_size 100m;\n\
+        proxy_request_buffering off;\n\
     }\n\
 \n\
-    # Proxy MinIO presigned URLs through /s3/\n\
+    # Proxy MinIO presigned URLs through /s3/ (Host must match MINIO_PUBLIC_ENDPOINT for SigV4)\n\
     location /s3/ {\n\
         proxy_pass http://${MINIO_HOST}/;\n\
-        proxy_set_header Host \$host;\n\
+        proxy_set_header Host localhost:9000;\n\
+        proxy_set_header X-Real-IP \$remote_addr;\n\
     }\n\
 \n\
     # SPA fallback\n\

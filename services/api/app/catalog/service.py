@@ -111,6 +111,14 @@ async def create_sku(
     return SKUResponse.model_validate(sku)
 
 
+async def get_sku(db: AsyncSession, org_id: UUID, sku_id: UUID) -> SKUResponse:
+    sku = await SKURepository.get_by_id_and_org(db, sku_id, org_id)
+    if sku is None:
+        raise LookupError("SKU_NOT_FOUND")
+    await db.refresh(sku, ["brand"])
+    return SKUResponse.model_validate(sku)
+
+
 async def list_skus(
     db: AsyncSession,
     org_id: UUID,

@@ -42,7 +42,8 @@ from app.tasks.samocat_stock_task import collect_samocat_stock
 
 logger = logging.getLogger(__name__)
 
-_SK_PLATFORM_NAME = "Самокат"
+# seed.py and migrations use Russian "Самокат"; older code used "Samocat" — match both.
+_SK_PLATFORM_NAMES = ("Самокат", "Samocat")
 
 
 def _load_samocat_sku_platform_ids(db) -> list[str]:
@@ -55,7 +56,7 @@ def _load_samocat_sku_platform_ids(db) -> list[str]:
         .join(Platform, Platform.id == SKUPlatform.platform_id)
         .join(SKU, SKU.id == SKUPlatform.sku_id)
         .filter(
-            Platform.name == _SK_PLATFORM_NAME,
+            Platform.name.in_(_SK_PLATFORM_NAMES),
             Platform.is_active.is_(True),
             SKUPlatform.is_monitored.is_(True),
         )

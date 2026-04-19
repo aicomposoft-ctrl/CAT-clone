@@ -27,9 +27,9 @@ def get_l1_scraper(platform_name: str):
         "Wildberries": _get_wildberries,
         "Ozon": _get_ozon,
         "Lenta": _get_lenta,
-        "Лента": _get_lenta,       # DB seed uses Cyrillic — both aliases supported
+        "Лента": _get_lenta,
         "Самокат": _get_samocat,
-        "Samocat": _get_samocat,   # Latin alias for backward compat
+        "Samocat": _get_samocat,
     }
 
     factory = _L1_MAP.get(platform_name)

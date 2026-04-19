@@ -25,7 +25,6 @@ Error handling:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -33,11 +32,11 @@ from datetime import datetime, timezone
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.celery_app import celery_app
-from app.core.base_scraper import ScraperError
-from app.core.proxy import get_proxy_rotator
+from app.core.base_scraper import DataType, ScraperError
+from app.core.scraper_router import ScraperRouter
 from app.models import ContentScore, SKUPlatform, SKU
-from app.scrapers.ozon import OzonScraper, _parse_item_id
 from app.tasks._db import get_db_session
+from app.tasks._redis import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,13 @@ def collect_ozon_stock(self, sku_platform_id: str) -> None:
     """
     with get_db_session() as db:
         row = (
-            db.query(SKUPlatform.id, SKUPlatform.external_id, SKU.org_id)
+            db.query(
+                SKUPlatform.id,
+                SKUPlatform.external_id,
+                SKUPlatform.url,
+                SKUPlatform.platform_id,
+                SKU.org_id,
+            )
             .join(SKU, SKU.id == SKUPlatform.sku_id)
             .filter(SKUPlatform.id == uuid.UUID(sku_platform_id))
             .first()
@@ -68,45 +73,31 @@ def collect_ozon_stock(self, sku_platform_id: str) -> None:
         )
         return
 
-    sp_id, raw_item_id, org_id = row
+    sp_id, item_id, page_url, platform_id, org_id = row
 
-    # Validate item_id before any HTTP call
-    try:
-        item_id = _parse_item_id(raw_item_id)
-    except ValueError:
-        # NO_ITEM_ID — external_id is None or empty string
-        logger.info(
-            "collect_ozon_stock: NO_ITEM_ID for sku_platform %s — skipping", sku_platform_id
-        )
-        return
-    except ScraperError as exc:
-        # PARSE_ERROR — item_id present but non-numeric
-        logger.warning(
-            "collect_ozon_stock: invalid item_id %r for sku_platform %s: %s",
-            raw_item_id,
-            sku_platform_id,
-            exc,
-        )
+    if not item_id:
+        logger.info("collect_ozon_stock: NO_ITEM_ID for sku_platform %s — skipping", sku_platform_id)
         return
 
-    scraper = OzonScraper(proxy_rotator=get_proxy_rotator())
-
-    try:
-        stock_data = asyncio.run(scraper.collect_stock(item_id))
-    except ScraperError as exc:
-        if exc.code == "NOT_FOUND":
-            logger.info(
-                "collect_ozon_stock: product item_id=%s not found on Ozon — skipping", item_id
-            )
-            return
-        logger.warning(
-            "collect_ozon_stock: ScraperError code=%s item_id=%s", exc.code, item_id
-        )
-        # No DB write on API failure — retry instead
-        raise self.retry(exc=exc, countdown=2 ** self.request.retries)
-
-    today = datetime.now(tz=timezone.utc).date()
     with get_db_session() as db:
+        router = ScraperRouter(db, redis_client=get_redis_client())
+        try:
+            stock_data = router.collect(
+                platform_id=platform_id,
+                sku_id=item_id,
+                data_type=DataType.STOCK,
+                org_id=org_id,
+                page_url=page_url,
+            )
+        except ScraperError as exc:
+            if exc.code == "NOT_FOUND":
+                logger.info("collect_ozon_stock: product item_id=%s not found on Ozon — skipping", item_id)
+                return
+            logger.warning("collect_ozon_stock: ScraperError code=%s item_id=%s", exc.code, item_id)
+            raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+        scraper_level: int | None = getattr(stock_data, "scraper_level", None)
+        today = datetime.now(tz=timezone.utc).date()
+
         # Partial-row upsert: set_ includes ONLY stock fields.
         # Content fields are intentionally absent from set_ so they are never
         # overwritten if the content task already ran first.
@@ -118,6 +109,7 @@ def collect_ozon_stock(self, sku_platform_id: str) -> None:
                 scored_at=today,
                 in_stock=stock_data.in_stock,
                 warehouse_qty=stock_data.total_qty,
+                scraper_level=scraper_level,
                 created_at=datetime.now(tz=timezone.utc),
             )
             .on_conflict_do_update(
@@ -125,14 +117,16 @@ def collect_ozon_stock(self, sku_platform_id: str) -> None:
                 set_={
                     "in_stock": stock_data.in_stock,
                     "warehouse_qty": stock_data.total_qty,
+                    "scraper_level": scraper_level,
                 },
             )
         )
         db.execute(stmt)
 
     logger.info(
-        "collect_ozon_stock: done item_id=%s in_stock=%s qty=%s",
+        "collect_ozon_stock: done item_id=%s in_stock=%s qty=%s scraper_level=%s",
         item_id,
         stock_data.in_stock,
         stock_data.total_qty,
+        scraper_level,
     )

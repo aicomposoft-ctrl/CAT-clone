@@ -302,6 +302,37 @@ async def test_list_skus_excludes_inactive_by_default(client, db_session):
     assert "Inactive" in names2
 
 
+@pytest.mark.asyncio
+async def test_get_sku_by_id(client, db_session):
+    org = await _make_org(db_session)
+    user = await _make_user(db_session, org.id)
+    brand = await _make_brand(db_session, org.id)
+    sku = await _make_sku(db_session, org.id, brand.id, name="Detail Me")
+    sku.reference_description = "Ref desc"
+    sku.reference_composition = "Ref comp"
+    await db_session.flush()
+
+    resp = await client.get(f"/api/v1/skus/{sku.id}", headers=_token(user))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == str(sku.id)
+    assert body["name"] == "Detail Me"
+    assert body["reference_description"] == "Ref desc"
+    assert body["reference_composition"] == "Ref comp"
+
+
+@pytest.mark.asyncio
+async def test_get_sku_other_org_404(client, db_session):
+    org_a = await _make_org(db_session)
+    org_b = await _make_org(db_session)
+    user_a = await _make_user(db_session, org_a.id)
+    brand_b = await _make_brand(db_session, org_b.id)
+    sku_b = await _make_sku(db_session, org_b.id, brand_b.id)
+
+    resp = await client.get(f"/api/v1/skus/{sku_b.id}", headers=_token(user_a))
+    assert resp.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # US-S03: SKU Update and Soft Delete
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   Tabs, Typography, Button, Table, Tag, Space, Modal, Form, Input, Select,
-  Upload, message, Popconfirm, Tooltip, Badge, Drawer, Spin, Image, Divider,
+  Upload, message, Popconfirm, Tooltip, Badge, Drawer, Spin, Image, Divider, Alert,
 } from 'antd'
 import {
   PlusOutlined, UploadOutlined, DeleteOutlined, LinkOutlined, DisconnectOutlined,
@@ -10,7 +10,7 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { ColumnsType } from 'antd/es/table'
 import { brandsApi, skusApi, platformsApi, skuPlatformsApi, referenceApi } from '../../api/catalog'
-import type { Brand, SKU, SKUPlatform } from '../../api/catalog'
+import type { Brand, SKU, SKUPlatform, ReferenceTextPatchResponse } from '../../api/catalog'
 
 const { Title } = Typography
 
@@ -202,45 +202,83 @@ function PlatformDrawer({ sku, onClose }: { sku: SKU | null; onClose: () => void
 // ── Reference Drawer ─────────────────────────────────────────────────────────
 
 function ReferenceDrawer({ sku, onClose }: { sku: SKU | null; onClose: () => void }) {
-  const [textForm] = Form.useForm()
+  const qc = useQueryClient()
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const skuId = sku?.id
 
-  // Reset preview and populate form with saved reference text when SKU changes
+  const {
+    data: skuDetail,
+    isLoading: skuDetailLoading,
+    isError: skuDetailError,
+  } = useQuery({
+    queryKey: ['sku-detail', skuId],
+    queryFn: () => skusApi.get(skuId!),
+    enabled: !!skuId,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: 'always',
+  })
+
+  const canEditReference = !!skuDetail && !skuDetailLoading && !skuDetailError
+
   useEffect(() => {
     setPreviewUrl(null)
-    textForm.setFieldsValue({
-      reference_description: sku?.reference_description ?? '',
-      reference_composition: sku?.reference_composition ?? '',
-    })
-  }, [sku?.id])
+  }, [skuId])
 
   const { data: imgData, isLoading: imgLoading } = useQuery({
-    queryKey: ['reference-image', sku?.id],
-    queryFn: () => referenceApi.getImageUrl(sku!.id),
-    enabled: !!sku,
+    queryKey: ['reference-image', skuId],
+    queryFn: () => referenceApi.getImageUrl(skuId!),
+    enabled: !!skuId,
     staleTime: 0,
   })
 
-  // Sync fetched URL into local state (only when not already set by upload)
   useEffect(() => {
-    if (imgData?.url && !previewUrl) setPreviewUrl(imgData.url)
-  }, [imgData?.url])
+    if (imgData?.url) setPreviewUrl(imgData.url)
+  }, [skuId, imgData?.url])
 
   const displayUrl = previewUrl ?? imgData?.url ?? null
 
   const imgMutation = useMutation({
-    mutationFn: (file: File) => referenceApi.uploadImage(sku!.id, file),
+    mutationFn: (file: File) => referenceApi.uploadImage(skuId!, file),
     onSuccess: (result: { url: string }) => {
       setPreviewUrl(result.url)
+      qc.invalidateQueries({ queryKey: ['skus'] })
+      qc.invalidateQueries({ queryKey: ['sku-detail', skuId] })
+      qc.invalidateQueries({ queryKey: ['reference-image', skuId] })
       message.success('Фото загружено')
     },
-    onError: () => message.error('Ошибка загрузки фото'),
+    onError: (err: unknown) => {
+      const status = (err as { response?: { status?: number; data?: { detail?: string } } })?.response
+        ?.status
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      message.error(
+        status === 503
+          ? `Загрузка недоступна (503). Проверьте MinIO и бакет cat-references: ${detail ?? 'S3 error'}`
+          : 'Ошибка загрузки фото',
+      )
+    },
   })
 
-  const textMutation = useMutation({
-    mutationFn: (v: { reference_description?: string; reference_composition?: string }) =>
-      referenceApi.updateText(sku!.id, v),
-    onSuccess: () => message.success('Эталонный текст сохранён'),
+  type TextSaveVars = { reference_description?: string; reference_composition?: string }
+
+  const textMutation = useMutation<ReferenceTextPatchResponse, Error, TextSaveVars>({
+    mutationFn: (v) => referenceApi.updateText(skuId!, v),
+    onSuccess: (saved) => {
+      // Merge PATCH echo into cache. Do not invalidate sku-detail here: a follow-up GET
+      // can race or (with an older API bundle) omit fields and overwrite good cache → empty form.
+      qc.setQueryData<SKU | undefined>(['sku-detail', skuId], (prev) =>
+        prev
+          ? {
+              ...prev,
+              reference_description: saved.reference_description,
+              reference_composition: saved.reference_composition,
+              updated_at: saved.updated_at ?? prev.updated_at,
+            }
+          : prev,
+      )
+      qc.invalidateQueries({ queryKey: ['skus'] })
+      message.success('Эталонный текст сохранён')
+    },
     onError: () => message.error('Ошибка сохранения'),
   })
 
@@ -250,13 +288,24 @@ function ReferenceDrawer({ sku, onClose }: { sku: SKU | null; onClose: () => voi
       open={!!sku}
       onClose={onClose}
       width={520}
+      destroyOnClose
     >
       <Typography.Title level={5}>Эталонное фото</Typography.Title>
       <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
         Фото с правильной подачей товара — сравнивается с фото на платформе при оценке контента.
       </Typography.Text>
 
-      {imgLoading && !displayUrl ? (
+      {skuDetailError ? (
+        <Alert
+          type="error"
+          showIcon
+          message="Не удалось загрузить данные SKU"
+          description="Обновите API (нужен GET /skus/{id}) и перезапустите контейнер api. Без этого эталонный текст может сохраняться пустым."
+          style={{ marginBottom: 12 }}
+        />
+      ) : null}
+
+      {(skuDetailLoading || imgLoading) && !displayUrl ? (
         <Spin />
       ) : displayUrl ? (
         <div style={{ marginBottom: 12 }}>
@@ -270,8 +319,13 @@ function ReferenceDrawer({ sku, onClose }: { sku: SKU | null; onClose: () => voi
         showUploadList={false}
         accept="image/jpeg,image/png,image/webp"
         beforeUpload={(file) => { imgMutation.mutate(file); return false }}
+        disabled={!canEditReference}
       >
-        <Button icon={<UploadOutlined />} loading={imgMutation.isPending}>
+        <Button
+          icon={<UploadOutlined />}
+          loading={imgMutation.isPending}
+          disabled={!canEditReference}
+        >
           {displayUrl ? 'Заменить фото' : 'Загрузить фото'}
         </Button>
       </Upload>
@@ -283,21 +337,34 @@ function ReferenceDrawer({ sku, onClose }: { sku: SKU | null; onClose: () => voi
         Описание и состав, которые должны быть на карточке товара. Используются для расчёта контент-скора.
       </Typography.Text>
 
-      <Form
-        form={textForm}
-        layout="vertical"
-        onFinish={(v) => textMutation.mutate(v)}
-      >
-        <Form.Item name="reference_description" label="Описание">
-          <Input.TextArea rows={4} maxLength={2000} showCount placeholder="Полное описание продукта..." />
-        </Form.Item>
-        <Form.Item name="reference_composition" label="Состав">
-          <Input.TextArea rows={3} maxLength={1000} showCount placeholder="Ингредиенты, состав..." />
-        </Form.Item>
-        <Button type="primary" htmlType="submit" loading={textMutation.isPending}>
-          Сохранить текст
-        </Button>
-      </Form>
+      {skuDetailLoading || !skuDetail ? (
+        <Spin />
+      ) : (
+        <Form
+          key={`ref-text-${skuDetail.id}-${skuDetail.updated_at}`}
+          layout="vertical"
+          initialValues={{
+            reference_description: skuDetail.reference_description ?? '',
+            reference_composition: skuDetail.reference_composition ?? '',
+          }}
+          onFinish={(v) => textMutation.mutate(v)}
+        >
+          <Form.Item name="reference_description" label="Описание">
+            <Input.TextArea rows={4} maxLength={2000} showCount placeholder="Полное описание продукта..." />
+          </Form.Item>
+          <Form.Item name="reference_composition" label="Состав">
+            <Input.TextArea rows={3} maxLength={1000} showCount placeholder="Ингредиенты, состав..." />
+          </Form.Item>
+          <Button
+            type="primary"
+            htmlType="submit"
+            loading={textMutation.isPending}
+            disabled={!canEditReference}
+          >
+            Сохранить текст
+          </Button>
+        </Form>
+      )}
     </Drawer>
   )
 }
@@ -479,8 +546,8 @@ function SKUsTab() {
           <Form.Item name="rpc" label="RPC">
             <Input />
           </Form.Item>
-          <Form.Item name="barcode" label="Штрихкод EAN">
-            <Input placeholder="4607161624661" />
+          <Form.Item name="barcode" label="Штрихкод">
+            <Input placeholder="EAN/UPC" />
           </Form.Item>
           <Form.Item name="category" label="Категория">
             <Input placeholder="Молочные продукты" />
@@ -519,8 +586,8 @@ function SKUsTab() {
           <Form.Item name="rpc" label="RPC">
             <Input />
           </Form.Item>
-          <Form.Item name="barcode" label="Штрихкод EAN">
-            <Input placeholder="4607161624661" />
+          <Form.Item name="barcode" label="Штрихкод">
+            <Input />
           </Form.Item>
           <Form.Item name="category" label="Категория">
             <Input />

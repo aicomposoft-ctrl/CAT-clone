@@ -16,17 +16,17 @@ Error handling:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
 
 from app.celery_app import celery_app
-from app.core.base_scraper import ScraperError
-from app.core.proxy import get_proxy_rotator
+from app.core.base_scraper import DataType, ScraperError
+from app.core.scraper_router import ScraperRouter
 from app.models import PriceSnapshot, SKUPlatform, SKU
-from app.scrapers.ozon import OzonScraper, _parse_item_id
 from app.tasks._db import get_db_session
+from app.tasks._redis import get_redis_client
+from app.tasks._retry_policy import should_retry_scrape_error
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,13 @@ def collect_ozon_price(self, sku_platform_id: str) -> None:
     """
     with get_db_session() as db:
         row = (
-            db.query(SKUPlatform.id, SKUPlatform.external_id, SKU.org_id)
+            db.query(
+                SKUPlatform.id,
+                SKUPlatform.external_id,
+                SKUPlatform.url,
+                SKUPlatform.platform_id,
+                SKU.org_id,
+            )
             .join(SKU, SKU.id == SKUPlatform.sku_id)
             .filter(SKUPlatform.id == uuid.UUID(sku_platform_id))
             .first()
@@ -57,43 +63,32 @@ def collect_ozon_price(self, sku_platform_id: str) -> None:
         )
         return
 
-    sp_id, raw_item_id, org_id = row
+    sp_id, item_id, page_url, platform_id, org_id = row
 
-    # Validate item_id before any HTTP call
-    try:
-        item_id = _parse_item_id(raw_item_id)
-    except ValueError:
-        # NO_ITEM_ID — external_id is None or empty string
-        logger.info(
-            "collect_ozon_price: NO_ITEM_ID for sku_platform %s — skipping", sku_platform_id
-        )
+    if not item_id:
+        logger.info("collect_ozon_price: NO_ITEM_ID for sku_platform %s — skipping", sku_platform_id)
         return
-    except ScraperError as exc:
-        # PARSE_ERROR — item_id present but non-numeric
-        logger.warning(
-            "collect_ozon_price: invalid item_id %r for sku_platform %s: %s",
-            raw_item_id,
-            sku_platform_id,
-            exc,
-        )
-        return
-
-    scraper = OzonScraper(proxy_rotator=get_proxy_rotator())
-
-    try:
-        price_data = asyncio.run(scraper.collect_price(item_id))
-    except ScraperError as exc:
-        if exc.code == "NOT_FOUND":
-            logger.info(
-                "collect_ozon_price: product item_id=%s not found on Ozon — skipping", item_id
-            )
-            return
-        logger.warning(
-            "collect_ozon_price: ScraperError code=%s item_id=%s", exc.code, item_id
-        )
-        raise self.retry(exc=exc, countdown=2 ** self.request.retries)
 
     with get_db_session() as db:
+        router = ScraperRouter(db, redis_client=get_redis_client())
+        try:
+            price_data = router.collect(
+                platform_id=platform_id,
+                sku_id=item_id,
+                data_type=DataType.PRICE,
+                org_id=org_id,
+                page_url=page_url,
+            )
+        except ScraperError as exc:
+            if exc.code == "NOT_FOUND":
+                logger.info("collect_ozon_price: product item_id=%s not found on Ozon — skipping", item_id)
+                return
+            logger.warning("collect_ozon_price: ScraperError code=%s item_id=%s", exc.code, item_id)
+            if not should_retry_scrape_error(exc):
+                raise
+            raise self.retry(exc=exc, countdown=2 ** self.request.retries)
+
+        scraper_level: int | None = getattr(price_data, "scraper_level", None)
         db.add(
             PriceSnapshot(
                 id=uuid.uuid4(),
@@ -102,13 +97,15 @@ def collect_ozon_price(self, sku_platform_id: str) -> None:
                 original_price=price_data.original_price,
                 discount_pct=price_data.discount_pct,
                 promo_label=price_data.promo_label,
+                scraper_level=scraper_level,
                 collected_at=datetime.now(tz=timezone.utc),
             )
         )
 
     logger.info(
-        "collect_ozon_price: done item_id=%s price=%s discount_pct=%s",
+        "collect_ozon_price: done item_id=%s price=%s discount_pct=%s scraper_level=%s",
         item_id,
         price_data.price,
         price_data.discount_pct,
+        scraper_level,
     )

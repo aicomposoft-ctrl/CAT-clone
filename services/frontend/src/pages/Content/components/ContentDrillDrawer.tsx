@@ -4,6 +4,7 @@ import { Drawer, Skeleton, Descriptions, Progress, Image, Typography, Tag } from
 import type EChartsReact from 'echarts-for-react'
 import ReactECharts from 'echarts-for-react'
 import { contentApi } from '../../../api/content'
+import { referenceStorageKeyToImageSrc } from '../../../api/catalog'
 import { ScoreBadge } from '../../../components/ScoreBadge'
 
 const { Text } = Typography
@@ -136,7 +137,11 @@ export const ContentDrillDrawer: React.FC<Props> = ({ skuPlatformId, open, onClo
             <div style={{ flex: 1 }}>
               <Tag color="blue">Эталон</Tag>
               {data.reference_image_url ? (
-                <Image src={data.reference_image_url} width="100%" style={{ marginTop: 4 }} />
+                <Image
+                  src={referenceStorageKeyToImageSrc(data.reference_image_url) ?? ''}
+                  width="100%"
+                  style={{ marginTop: 4 }}
+                />
               ) : (
                 <Text type="secondary">Эталон не загружен</Text>
               )}
