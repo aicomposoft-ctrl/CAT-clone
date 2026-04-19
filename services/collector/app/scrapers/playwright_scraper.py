@@ -198,49 +198,61 @@ class PlaywrightScraper:
                         # Non-fatal; continue to product page.
                         pass
 
-            # Yandex search warm-up: navigate to Yandex before the product page so the
-            # visit appears as organic search traffic.  Anti-bot systems check the Referer
-            # header and browser history — arriving from yandex.ru is much less suspicious
-            # than a direct headless request.
+            # Search engine warm-up: visit a search engine before the product page so the
+            # visit appears as organic traffic.  Anti-bot systems check the Referer header
+            # and browser history — arriving from a search engine is less suspicious than
+            # a direct headless request.
             #
             # Enable per platform via platform_config:
-            #   {"yandex_warmup": true, "yandex_search_query": "Агуша яблоко 90г ozon"}
+            #   {"yandex_warmup": true}                       → Google (default, no SmartCaptcha)
+            #   {"yandex_warmup": true, "warmup_engine": "yandex"}  → Yandex (has SmartCaptcha)
+            #   {"yandex_warmup": true, "yandex_search_query": "Агуша яблоко 90г"}
             #
-            # If yandex_search_query is omitted, the URL domain is used as the search hint.
-            _yandex_referer: Optional[str] = None
+            # Google is the default because it loads cleanly in headless Chromium without
+            # triggering SmartCaptcha, while yandex.ru often times out or shows a challenge.
+            _warmup_referer: Optional[str] = None
             if self._platform_config.get("yandex_warmup"):
                 _search_q = self._platform_config.get(
                     "yandex_search_query",
                     f"{self._platform_name} {_root_url(url) or ''}".strip(),
                 )
-                _yandex_referer = f"https://yandex.ru/search/?text={quote_plus(_search_q)}"
+                _engine = self._platform_config.get("warmup_engine", "google").lower()
+                if _engine == "yandex":
+                    _warmup_home = "https://yandex.ru"
+                    _warmup_referer = f"https://yandex.ru/search/?text={quote_plus(_search_q)}"
+                else:
+                    # Google: no SmartCaptcha on main page, loads reliably in headless Chrome
+                    _warmup_home = "https://www.google.com"
+                    _warmup_referer = f"https://www.google.com/search?q={quote_plus(_search_q)}"
                 try:
                     await page.goto(
-                        "https://yandex.ru",
+                        _warmup_home,
                         wait_until="domcontentloaded",
                         timeout=_YANDEX_WARMUP_TIMEOUT_MS,
                     )
                     await asyncio.sleep(1.2)
                     intercepted.clear()
                     logger.info(
-                        "PlaywrightScraper: Yandex warm-up complete for %s (referer=%s)",
+                        "PlaywrightScraper: search warm-up complete for %s engine=%s referer=%s",
                         self._platform_name,
-                        _yandex_referer,
+                        _engine,
+                        _warmup_referer,
                     )
                 except Exception as exc:
                     logger.warning(
-                        "PlaywrightScraper: Yandex warm-up failed for %s: %s — continuing",
+                        "PlaywrightScraper: search warm-up failed for %s engine=%s: %s — continuing",
                         self._platform_name,
+                        _engine,
                         exc,
                     )
-                    _yandex_referer = None  # fall back to direct navigation
+                    _warmup_referer = None  # fall back to direct navigation
 
             # Navigate to actual product page
             try:
                 wait_mode = "domcontentloaded" if fresh_context else "networkidle"
                 goto_kwargs: dict = {"wait_until": wait_mode, "timeout": _LOAD_TIMEOUT_MS}
-                if _yandex_referer:
-                    goto_kwargs["referer"] = _yandex_referer
+                if _warmup_referer:
+                    goto_kwargs["referer"] = _warmup_referer
                 await page.goto(url, **goto_kwargs)
                 # Give SPA hydration scripts a moment to populate product widgets.
                 await asyncio.sleep(1.8 if fresh_context else 1.2)
