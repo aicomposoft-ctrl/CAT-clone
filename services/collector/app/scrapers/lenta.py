@@ -290,6 +290,14 @@ class LentaScraper(BaseScraper):
                     "NOT_FOUND",
                     f"product_id={product_id} not found",
                 )
+            # 401/403 from Lenta API = Qrator geo/auth block on the mobile endpoint.
+            # Map to ANTIBOT_BLOCK so ScraperRouter falls through to L2.
+            if resp.status_code in (401, 403):
+                raise ScraperError(
+                    "ANTIBOT_BLOCK",
+                    f"Lenta API {resp.status_code} for product_id={product_id} — Qrator block",
+                    details={"reason": "geo_or_auth_block", "confidence": "high"},
+                )
             # raise_for_status() raises httpx.HTTPStatusError for any non-2xx
             # response — with_retry() catches that and retries 429/5xx with
             # exponential backoff before raising ScraperError.

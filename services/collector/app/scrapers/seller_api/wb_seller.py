@@ -180,6 +180,14 @@ class WBSellerAPIScraper(BaseScraper):
             raise ScraperError("NOT_FOUND", f"No cards returned for nm_id={nm_id}")
 
         card = cards[0]
+        returned_nm = card.get("nmID") or card.get("nmId") or "unknown"
+        returned_title = (card.get("title") or "")[:80]
+        logger.info(
+            "WBSellerAPIScraper._collect_content: queried nm_id=%s → returned nmID=%s title=%r",
+            nm_id,
+            returned_nm,
+            returned_title,
+        )
 
         # Extract composition from characteristics array
         composition: Optional[str] = None
@@ -220,9 +228,11 @@ class WBSellerAPIScraper(BaseScraper):
         size = sizes[0] if sizes else {}
 
         try:
-            # API returns prices in roubles (not kopecks) for this endpoint
-            price = Decimal(str(size.get("discountedPrice") or size.get("price") or 0))
-            original = Decimal(str(size.get("price") or price))
+            # /api/v2/list/goods/filter returns prices in KOPECKS — divide by 100.
+            raw_discounted = size.get("discountedPrice") or size.get("price") or 0
+            raw_base = size.get("price") or raw_discounted
+            price = Decimal(str(raw_discounted)) / 100
+            original = Decimal(str(raw_base)) / 100
         except InvalidOperation as exc:
             raise ScraperError("PARSE_ERROR", f"Invalid price values in response: {exc}") from exc
 
