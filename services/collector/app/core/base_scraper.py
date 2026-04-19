@@ -174,14 +174,23 @@ class BaseScraper(ABC):
         self._ua_idx += 1
         return ua
 
-    async def _get(self, url: str, **kwargs) -> httpx.Response:
+    async def _get(self, url: str, **kwargs) -> "Union[httpx.Response, _CffiResponseAdapter]":
         """
         Async GET with rate limiting, proxy rotation, and user-agent rotation.
 
         When `_impersonate` is set on the subclass, routes through curl_cffi
         AsyncSession with Chrome 131 TLS/JA3/HTTP2 impersonation.  Proxy is
         passed per-request (not frozen at session init) so ProxyRotator works.
+
+        curl_cffi network/timeout errors are normalised to httpx.TransportError
+        so that with_retry() handles them identically to httpx failures.
         """
+        # Reject non-HTTPS URLs — scrapers construct all URLs internally but
+        # this is a defence-in-depth guard against accidental HTTP or file:// calls.
+        from urllib.parse import urlparse as _urlparse
+        if _urlparse(url).scheme != "https":
+            raise ScraperError("PARSE_ERROR", f"Non-HTTPS URL rejected by _get(): {url!r}")
+
         async with self._semaphore:
             await asyncio.sleep(1.0 / self.rate_limit)
             proxy = self._proxy.next()
@@ -197,14 +206,19 @@ class BaseScraper(ABC):
                     ) from exc
                 proxies = {"http": proxy, "https": proxy} if proxy else None
                 merged_headers = {**_CHROME131_SEC_HEADERS, **headers}
-                async with AsyncSession(impersonate=self._impersonate) as session:
-                    resp = await session.get(
-                        url,
-                        headers=merged_headers,
-                        proxies=proxies,
-                        timeout=30,
-                        **kwargs,
-                    )
+                try:
+                    async with AsyncSession(impersonate=self._impersonate) as session:
+                        resp = await session.get(
+                            url,
+                            headers=merged_headers,
+                            proxies=proxies,
+                            timeout=30,
+                            **kwargs,
+                        )
+                except Exception as exc:
+                    # Normalise curl_cffi transport/timeout errors so with_retry()
+                    # catches them via its httpx.TransportError handler.
+                    raise httpx.TransportError(str(exc)) from exc
                 return _CffiResponseAdapter(resp)
 
             async with httpx.AsyncClient(proxy=proxy, timeout=30.0, follow_redirects=True) as client:

@@ -1,3 +1,4 @@
 # Additional dependencies for the collector-playwright service.
 # These are NOT installed in the base collector image to keep it small.
+patchright>=1.50.0,<2.0
 playwright==1.44.0

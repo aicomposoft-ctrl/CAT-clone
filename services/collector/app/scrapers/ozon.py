@@ -150,12 +150,13 @@ class OzonScraper(BaseScraper):
     PRODUCT_URL = "/product/{item_id}/"
     REVIEWS_URL = "/product/{item_id}/reviews/"
 
-    # Required headers to bypass Ozon's User-Agent and app-version filtering
+    # Required headers to bypass Ozon's User-Agent and app-version filtering.
+    # UA version must match _impersonate="chrome131" to avoid UA/TLS fingerprint mismatch.
     _HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
+            "Chrome/131.0.0.0 Safari/537.36"
         ),
         "x-o3-app-name": "pdp",
         "x-o3-app-version": "2.68.0",

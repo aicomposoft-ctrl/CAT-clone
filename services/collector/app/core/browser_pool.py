@@ -25,6 +25,15 @@ from typing import AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
 
+# Shared launch args used by both initial launch and crash-recovery relaunch.
+# Keeping them in one place prevents the relaunch path from silently omitting
+# stealth flags (e.g. --disable-blink-features=AutomationControlled).
+_CHROMIUM_LAUNCH_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-blink-features=AutomationControlled",
+]
+
 
 class BrowserPool:
     """
@@ -72,11 +81,7 @@ class BrowserPool:
         for _ in range(self._size):
             browser = await self._playwright.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled",
-                ],
+                args=_CHROMIUM_LAUNCH_ARGS,
             )
             self._browsers.append(browser)
         logger.info("BrowserPool started: %d browser(s)", self._size)
@@ -253,7 +258,7 @@ class BrowserPool:
             pass  # already disconnected
         new_browser = await self._playwright.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=_CHROMIUM_LAUNCH_ARGS,
         )
         self._browsers[idx] = new_browser
         logger.info("BrowserPool: relaunched browser at index %d", idx)
