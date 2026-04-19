@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 _LOAD_TIMEOUT_MS = 30_000
 # CSS selector extraction timeout (ms)
 _SELECTOR_TIMEOUT_MS = 5_000
+# Yandex warm-up step timeout (ms) — intentionally shorter than _LOAD_TIMEOUT_MS.
+# If yandex.ru doesn't load within this window (slow network, SmartCaptcha, or block),
+# the warm-up is skipped gracefully and the scraper proceeds without a Yandex referer.
+_YANDEX_WARMUP_TIMEOUT_MS = 12_000
 # MinIO bucket for debug screenshots
 _DEBUG_BUCKET = "cat-debug"
 
@@ -214,11 +218,11 @@ class PlaywrightScraper:
                     await page.goto(
                         "https://yandex.ru",
                         wait_until="domcontentloaded",
-                        timeout=_LOAD_TIMEOUT_MS,
+                        timeout=_YANDEX_WARMUP_TIMEOUT_MS,
                     )
                     await asyncio.sleep(1.2)
                     intercepted.clear()
-                    logger.debug(
+                    logger.info(
                         "PlaywrightScraper: Yandex warm-up complete for %s (referer=%s)",
                         self._platform_name,
                         _yandex_referer,
