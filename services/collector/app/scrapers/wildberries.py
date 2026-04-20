@@ -6,6 +6,16 @@ Falls back gracefully when product is not found or API is unavailable.
 
 Rate limit: 1.0 req/sec.
 Image URLs validated against CDN allowlist before fetching (SSRF guard).
+
+⚠️  WB Anti-bot status (2026-04-20):
+WB has deployed a comprehensive anti-bot system (wbaas) on ALL their endpoints.
+card.wb.ru returns HTTP 404 with x-pow challenge header:
+  x-pow: status=invalid;challenge=7,8,1,<seed>,<uuid1>,<uuid2>,<expires>,...
+The challenge requires browser fingerprinting (canvas, WebGL) to solve —
+curl_cffi (TLS impersonation alone) cannot bypass it.
+L2 (patchright) also fails: wbaas challenge page ("Почти готово...") correctly
+detected by anti_bot.py, but headless Chromium fingerprint is rejected.
+Recommended fix: residential proxy + playwright-stealth plugin, or mobile API.
 """
 
 from __future__ import annotations
@@ -57,8 +67,9 @@ class WildberriesScraper(BaseScraper):
     rate_limit = 1.0  # req/sec
     _impersonate = "chrome131"  # curl_cffi TLS impersonation to bypass Cloudflare
 
-    # WB migrated *.wb.ru → *.wildberries.ru in April 2025. Try legacy first
-    # (still resolves for many clients); fall back to new domain on connection failure.
+    # card.wb.ru resolves but returns 404 + x-pow challenge (wbaas PoW required).
+    # card.wildberries.ru doesn't resolve from Docker container.
+    # Both entries kept for reference; both will fail until wbaas is solved.
     _CARD_APIS = [
         "https://card.wb.ru/cards/v2/detail",
         "https://card.wildberries.ru/cards/v2/detail",
