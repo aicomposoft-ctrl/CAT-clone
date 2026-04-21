@@ -74,9 +74,14 @@ _SYSTEM_PROMPTS: dict[DataType, str] = {
     ),
     DataType.PRICE: (
         "Extract price information from the accessibility tree.\n"
-        'Return ONLY a JSON object: {"price": 999.99, "original_price": 1199.99, '
-        '"discount_pct": 16.7, "promo_label": "..."}\n'
-        "Prices as numbers in rubles. Use null for missing fields. No explanation."
+        "Return ONLY a JSON object with these exact fields:\n"
+        '  "price": current selling price as a plain number in rubles (REQUIRED, no currency symbols)\n'
+        '  "original_price": full price before any discount as a plain number (equal to price if no discount)\n'
+        '  "discount_pct": discount percentage as a plain number, 0 if no discount\n'
+        '  "promo_label": promo/sale label string, or null if absent\n'
+        "Example format only (do NOT copy these values): "
+        '{"price": 0.00, "original_price": 0.00, "discount_pct": 0, "promo_label": null}\n'
+        "Use the actual prices from the page. No explanation."
     ),
     DataType.STOCK: (
         "Determine product availability from the accessibility tree.\n"
@@ -437,6 +442,15 @@ class AgentScraper:
 
             if data_type == DataType.PRICE:
                 m = _PriceResponse.model_validate(data)
+                # Guard against Claude echoing back the prompt's example values (0.00)
+                # or any obviously sentinel price — these indicate the page price was
+                # not found rather than an actual zero-priced product.
+                if m.price <= Decimal("0"):
+                    raise ScraperError(
+                        "AGENT_EXTRACTION_FAILED",
+                        f"AgentScraper: L3 returned zero/negative price — "
+                        f"price={m.price} (page price not found or prompt echo)",
+                    )
                 # Compute discount_pct if not provided or zero but prices differ
                 discount_pct = m.discount_pct
                 if discount_pct == Decimal("0") and m.original_price > m.price:
