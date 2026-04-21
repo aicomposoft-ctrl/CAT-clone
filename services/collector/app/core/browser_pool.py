@@ -14,6 +14,12 @@ Celery signal wiring at module level:
     init_browser_pool  → worker_init  (creates the singleton pool)
     close_browser_pool → worker_shutdown (gracefully closes all browsers)
     get_browser_pool() → returns the singleton; raises RuntimeError if not initialised
+
+Browser engine priority:
+    1. Camoufox   — antidetect Firefox; bypasses Cloudflare JS challenge (~99%)
+                    and reduces Akamai/Kasada fingerprint score.
+    2. patchright  — patched Chromium (patches Runtime.enable CDP leak).
+    3. playwright  — vanilla Chromium (weakest; kept as last resort).
 """
 
 from __future__ import annotations
@@ -25,9 +31,7 @@ from typing import AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
 
-# Shared launch args used by both initial launch and crash-recovery relaunch.
-# Keeping them in one place prevents the relaunch path from silently omitting
-# stealth flags (e.g. --disable-blink-features=AutomationControlled).
+# Chromium launch args — only used when engine is patchright/playwright.
 _CHROMIUM_LAUNCH_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -51,32 +55,59 @@ class BrowserPool:
         self._size = size
         self._semaphore: Optional[asyncio.Semaphore] = None
         self._playwright = None
-        self._browsers: list = []  # list of playwright Browser objects
+        self._browsers: list = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._shared_contexts: dict[str, object] = {}
+        self._engine: str = "unknown"
+        # camoufox: one AsyncCamoufox context manager per browser slot (needed for cleanup)
+        self._camoufox_instances: list = []
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def _start(self) -> None:
-        """Async initialisation — launch Playwright/patchright and `size` browser instances."""
+        """Launch browsers.  Tries Camoufox → patchright → playwright in order."""
+        self._semaphore = asyncio.Semaphore(self._size)
+
+        # ── Option 1: Camoufox (antidetect Firefox) ──────────────────────
+        try:
+            from camoufox.async_api import AsyncCamoufox
+            self._engine = "camoufox"
+            logger.info("BrowserPool: using Camoufox (antidetect Firefox)")
+            for _ in range(self._size):
+                cf = AsyncCamoufox(
+                    headless=True,
+                    locale=["ru-RU", "en-US"],
+                    os="windows",
+                )
+                browser = await cf.__aenter__()
+                self._camoufox_instances.append(cf)
+                self._browsers.append(browser)
+            logger.info("BrowserPool started (camoufox): %d browser(s)", self._size)
+            return
+        except ImportError:
+            logger.info("BrowserPool: camoufox not installed, trying patchright")
+        except Exception as exc:
+            logger.warning("BrowserPool: camoufox failed (%s), trying patchright", exc)
+
+        # ── Option 2: patchright (patched Chromium) ───────────────────────
         try:
             from patchright.async_api import async_playwright
+            self._engine = "patchright"
             logger.info("BrowserPool: using patchright (Runtime.enable CDP leak patched)")
         except ImportError:
             try:
                 from playwright.async_api import async_playwright
+                self._engine = "playwright"
                 logger.warning(
                     "BrowserPool: patchright not installed — falling back to playwright. "
-                    "CDP automation leak NOT patched. "
-                    "Install with: pip install patchright && patchright install chromium"
+                    "CDP automation leak NOT patched."
                 )
             except ImportError as exc:
                 raise RuntimeError(
-                    "Neither patchright nor playwright is installed — "
+                    "No browser engine available (tried camoufox, patchright, playwright). "
                     "BrowserPool is only available in the collector-playwright service."
                 ) from exc
 
-        self._semaphore = asyncio.Semaphore(self._size)
         self._playwright = await async_playwright().start()
         for _ in range(self._size):
             browser = await self._playwright.chromium.launch(
@@ -84,10 +115,10 @@ class BrowserPool:
                 args=_CHROMIUM_LAUNCH_ARGS,
             )
             self._browsers.append(browser)
-        logger.info("BrowserPool started: %d browser(s)", self._size)
+        logger.info("BrowserPool started (%s): %d browser(s)", self._engine, self._size)
 
     async def _stop(self) -> None:
-        """Async shutdown — close all browsers then stop Playwright."""
+        """Async shutdown — close all browsers then stop Playwright/Camoufox."""
         for key, context in list(self._shared_contexts.items()):
             try:
                 await context.close()
@@ -95,19 +126,28 @@ class BrowserPool:
                 logger.warning("BrowserPool: error closing shared context %s: %s", key, exc)
         self._shared_contexts.clear()
 
-        for browser in self._browsers:
-            try:
-                await browser.close()
-            except Exception as exc:
-                logger.warning("BrowserPool: error closing browser: %s", exc)
-        self._browsers.clear()
+        if self._engine == "camoufox":
+            for cf in self._camoufox_instances:
+                try:
+                    await cf.__aexit__(None, None, None)
+                except Exception as exc:
+                    logger.warning("BrowserPool: error closing camoufox: %s", exc)
+            self._camoufox_instances.clear()
+            self._browsers.clear()
+        else:
+            for browser in self._browsers:
+                try:
+                    await browser.close()
+                except Exception as exc:
+                    logger.warning("BrowserPool: error closing browser: %s", exc)
+            self._browsers.clear()
 
-        if self._playwright:
-            try:
-                await self._playwright.stop()
-            except Exception as exc:
-                logger.warning("BrowserPool: error stopping playwright: %s", exc)
-            self._playwright = None
+            if self._playwright:
+                try:
+                    await self._playwright.stop()
+                except Exception as exc:
+                    logger.warning("BrowserPool: error stopping playwright: %s", exc)
+                self._playwright = None
 
         logger.info("BrowserPool stopped")
 
@@ -189,14 +229,16 @@ class BrowserPool:
                 context = await browser.new_context(**context_kwargs)
 
             page = await context.new_page()
-            # Stealth: remove webdriver property and navigator.plugins signature
-            # that Ozon/WB anti-bot checks for headless detection.
-            await page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-                Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU','ru','en-US','en']});
-                window.chrome = {runtime: {}};
-            """)
+            # Stealth init script for Chromium only.
+            # Camoufox (Firefox) patches these at the browser level — injecting
+            # window.chrome on a real Firefox would be a bot signal, not a fix.
+            if self._engine != "camoufox":
+                await page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+                    Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU','ru','en-US','en']});
+                    window.chrome = {runtime: {}};
+                """)
             try:
                 yield page
             finally:
@@ -225,9 +267,15 @@ class BrowserPool:
                 logger.warning("BrowserPool: failed evicting shared context %s: %s", key, exc)
 
     def _context_kwargs(self, profile_variant: str) -> dict:
+        # Camoufox sets UA, locale, timezone internally at browser launch — overriding
+        # them per-context would break fingerprint consistency and signal automation.
+        if self._engine == "camoufox":
+            vp = {"width": 1366, "height": 768} if profile_variant == "fresh" else {"width": 1280, "height": 800}
+            return {"viewport": vp}
+
         # Chrome version MUST match the actual Chromium version in the container.
         # patchright >=1.50 ships Chromium 1208 = Chrome 131.
-        # Mismatched UA vs real Chromium version is a strong bot signal for Akamai/Cloudflare.
+        # Mismatched UA vs real version is a strong bot signal for Akamai/Cloudflare.
         if profile_variant == "fresh":
             return {
                 "viewport": {"width": 1366, "height": 768},
@@ -259,12 +307,26 @@ class BrowserPool:
             await old_browser.close()
         except Exception:
             pass  # already disconnected
-        new_browser = await self._playwright.chromium.launch(
-            headless=True,
-            args=_CHROMIUM_LAUNCH_ARGS,
-        )
-        self._browsers[idx] = new_browser
-        logger.info("BrowserPool: relaunched browser at index %d", idx)
+
+        if self._engine == "camoufox":
+            from camoufox.async_api import AsyncCamoufox
+            old_cf = self._camoufox_instances[idx]
+            try:
+                await old_cf.__aexit__(None, None, None)
+            except Exception:
+                pass
+            new_cf = AsyncCamoufox(headless=True, locale=["ru-RU", "en-US"], os="windows")
+            new_browser = await new_cf.__aenter__()
+            self._camoufox_instances[idx] = new_cf
+            self._browsers[idx] = new_browser
+        else:
+            new_browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=_CHROMIUM_LAUNCH_ARGS,
+            )
+            self._browsers[idx] = new_browser
+
+        logger.info("BrowserPool: relaunched %s browser at index %d", self._engine, idx)
         return new_browser
 
 

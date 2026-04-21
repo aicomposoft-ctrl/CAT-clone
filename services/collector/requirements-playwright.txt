@@ -1,10 +1,12 @@
 # Additional dependencies for the collector-playwright service.
 # These are NOT installed in the base collector image to keep it small.
 #
-# patchright is a drop-in replacement for playwright that patches the
-# Runtime.enable CDP leak detected by Cloudflare/Akamai. It cannot be
-# installed alongside playwright (they provide the same module API).
-# The base image (mcr.microsoft.com/playwright/python:v1.44.0-jammy) has
-# playwright pre-installed; pip install patchright upgrades/replaces it.
-# BrowserPool._start() tries patchright first, falls back to playwright.
+# Browser engine priority (BrowserPool._start tries in order):
+#   1. camoufox  — antidetect Firefox; bypasses Cloudflare JS challenge (~99%)
+#                  and lowers Akamai/Kasada fingerprint score.
+#                  Requires: pip install camoufox[geoip] && python -m camoufox fetch
+#   2. patchright — patched Chromium (patches Runtime.enable CDP leak).
+#                  Cannot be installed alongside vanilla playwright.
+#   3. playwright — vanilla Chromium (last resort, already in base image).
+camoufox[geoip]>=0.4.0
 patchright>=1.50.0,<2.0

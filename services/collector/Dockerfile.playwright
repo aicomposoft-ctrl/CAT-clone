@@ -4,8 +4,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
 
-# Playwright image already has Chromium and its system deps.
-# Only add what we need on top: libpq for psycopg2.
+# Playwright image already has Chromium + Firefox system deps.
+# Only add: libpq for psycopg2.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         libpq-dev \
@@ -17,6 +17,12 @@ WORKDIR /app
 
 COPY requirements.txt requirements-playwright.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-playwright.txt
+
+# Download Camoufox's patched Firefox binary (primary engine).
+# camoufox stores it in ~/.local/share/camoufox/ — baked into the image layer.
+RUN python -m camoufox fetch
+
+# Keep patchright Chromium as fallback engine.
 RUN patchright install chromium --with-deps
 
 COPY app/ ./app/
