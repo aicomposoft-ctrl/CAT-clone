@@ -48,8 +48,10 @@ def compute_clip_embedding(self, sku_id: str, s3_key: str) -> None:
         s3_key: MinIO object key for the reference image
     """
     # Step 1: Download image from MinIO (retry on transient errors)
+    # Reference images are stored in "cat-references" bucket by the API service.
+    # processor's MINIO_BUCKET default ("cat-data") is for collected images — not references.
     try:
-        image_bytes = download_object(s3_key)
+        image_bytes = download_object(s3_key, bucket="cat-references")
     except ValueError as exc:
         # Oversized image — no retry
         logger.warning(

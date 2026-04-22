@@ -53,6 +53,48 @@ def _load() -> None:
     logger.info("E5 model loaded")
 
 
+def encode_reference_text(text: str) -> np.ndarray:
+    """
+    Encode a reference text (description / composition) with "passage: " prefix.
+
+    Used when computing reference embeddings to store in Redis.
+    Collected texts are encoded with "query: " prefix (see encode_text below) —
+    the asymmetric query/passage encoding is required by the e5 protocol.
+
+    Returns np.ndarray of shape (768,), L2-normalized.
+    Raises ValueError if embedding has near-zero norm.
+    """
+    import torch
+
+    _load()
+
+    prefixed = "passage: " + text
+    inputs = _tokenizer(
+        prefixed,
+        return_tensors="pt",
+        truncation=True,
+        max_length=512,
+        padding=True,
+    )
+    with torch.no_grad():
+        outputs = _model(**inputs)
+        token_embeddings = outputs.last_hidden_state
+        attention_mask = inputs["attention_mask"]
+        mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        emb = torch.sum(token_embeddings * mask_expanded, dim=1) / torch.clamp(
+            mask_expanded.sum(dim=1), min=1e-9
+        )
+        emb = emb / emb.norm(dim=-1, keepdim=True)
+
+    vec: np.ndarray = emb.squeeze().cpu().numpy()
+    norm = float(np.linalg.norm(vec))
+    if norm < 1e-8:
+        raise ValueError(
+            f"E5 produced near-zero embedding for reference text (norm={norm:.2e})"
+        )
+    return vec
+
+
 def encode_text(text: str) -> np.ndarray:
     """
     Encode text with multilingual-e5-base.

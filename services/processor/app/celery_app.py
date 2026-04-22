@@ -32,6 +32,7 @@ celery_app = Celery(
     backend=REDIS_URL,
     include=[
         "app.tasks.clip_embedding_task",
+        "app.tasks.text_embedding_task",
         "app.tasks.image_scoring_task",
         "app.tasks.text_scoring_task",
         "app.tasks.sentiment_task",
