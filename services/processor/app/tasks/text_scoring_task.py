@@ -47,10 +47,40 @@ from app.models import ContentScore, SKUPlatform
 
 logger = logging.getLogger(__name__)
 
-# content_total formula weights
+# content_total formula weights (full formula, all three components present)
 _W_IMAGE = Decimal("0.40")
 _W_DESC = Decimal("0.35")
 _W_COMP = Decimal("0.25")
+
+
+def _compute_content_total(
+    image_score: Decimal,
+    desc_score: Decimal | None,
+    comp_score: Decimal | None,
+) -> Decimal | None:
+    """
+    Compute content_total from available component scores.
+
+    Weights are normalized to sum to 1.0 when components are missing.
+    Returns None only if image_score itself is None (caller should guard).
+
+    Full (all 3):        0.40×image + 0.35×desc + 0.25×comp
+    No composition:      0.533×image + 0.467×desc   (0.40/0.75, 0.35/0.75)
+    No description:      0.615×image + 0.385×comp   (0.40/0.65, 0.25/0.65)
+    Image only:          1.0×image
+    """
+    components: list[tuple[Decimal, Decimal]] = [(image_score, _W_IMAGE)]
+    if desc_score is not None:
+        components.append((desc_score, _W_DESC))
+    if comp_score is not None:
+        components.append((comp_score, _W_COMP))
+
+    total_weight = sum(w for _, w in components)
+    if total_weight == Decimal("0"):
+        return None
+
+    raw = sum(score * w for score, w in components) / total_weight
+    return raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _today() -> date:
@@ -190,7 +220,12 @@ def score_text_content(
     if not scores_to_write:
         return  # nothing to write
 
-    # ── content_total (all three scores required) ────────────────────────────
+    # ── content_total (computed from available components, weights normalized) ─
+    # Full formula:   0.40×image + 0.35×desc + 0.25×comp
+    # Partial (no comp): normalized to 0.533×image + 0.467×desc (weights sum to 1)
+    # Partial (no desc): normalized to 0.615×image + 0.385×comp
+    # Image-only or desc/comp-only: use that score directly
+    # NULL content_total only when image_score is not yet available.
     try:
         with get_db_session() as db:
             row = (
@@ -212,23 +247,13 @@ def score_text_content(
 
             # Merge existing scores with newly computed ones
             image_score = row.image_score
-            new_desc = scores_to_write.get(
-                "description_score", row.description_score
-            )
-            new_comp = scores_to_write.get(
-                "composition_score", row.composition_score
-            )
+            new_desc = scores_to_write.get("description_score", row.description_score)
+            new_comp = scores_to_write.get("composition_score", row.composition_score)
 
-            if (
-                image_score is not None
-                and new_desc is not None
-                and new_comp is not None
-            ):
-                scores_to_write["content_total"] = (
-                    _W_IMAGE * image_score
-                    + _W_DESC * new_desc
-                    + _W_COMP * new_comp
-                ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if image_score is not None:
+                content_total = _compute_content_total(image_score, new_desc, new_comp)
+                if content_total is not None:
+                    scores_to_write["content_total"] = content_total
 
             result = db.execute(
                 update(ContentScore)
