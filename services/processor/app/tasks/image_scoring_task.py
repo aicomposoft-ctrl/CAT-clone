@@ -93,7 +93,7 @@ def score_image_content_all() -> None:
     group(
         score_image_content.s(str(row.id), str(row.sku_id), row.collected_image_url)
         for row in rows
-    ).delay()
+    ).apply_async(queue="ml")
 
     logger.info("score_image_content_all: dispatched %d tasks", count)
 

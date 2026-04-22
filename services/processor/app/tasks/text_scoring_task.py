@@ -105,7 +105,7 @@ def score_text_content_all() -> None:
             row.collected_composition,
         )
         for row in rows
-    ).delay()
+    ).apply_async(queue="ml")
 
     logger.info("score_text_content_all: dispatched %d tasks", count)
 
