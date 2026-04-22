@@ -60,7 +60,8 @@ def _dispatch_clip_task(sku_id: UUID, s3_key: str) -> Optional[str]:
     """Dispatch CLIP embedding Celery task. Returns task ID or None if Celery not configured."""
     try:
         from app.tasks.embedding_tasks import compute_clip_embedding
-        task = compute_clip_embedding.delay(str(sku_id), s3_key)
+        # Must route to 'ml' queue — processor worker listens on --queues=ml only.
+        task = compute_clip_embedding.apply_async(args=[str(sku_id), s3_key], queue="ml")
         return task.id
     except Exception as exc:
         logger.warning("CLIP embedding task dispatch failed: %s", exc)
@@ -71,7 +72,8 @@ def _dispatch_text_task(sku_id: UUID, field: str, text: str) -> Optional[str]:
     """Dispatch text embedding Celery task. Returns task ID or None if Celery not configured."""
     try:
         from app.tasks.embedding_tasks import compute_text_embedding
-        task = compute_text_embedding.delay(str(sku_id), field, text)
+        # Must route to 'ml' queue — processor worker listens on --queues=ml only.
+        task = compute_text_embedding.apply_async(args=[str(sku_id), field, text], queue="ml")
         return task.id
     except Exception as exc:
         logger.warning("Text embedding task dispatch failed for field %s: %s", field, exc)
