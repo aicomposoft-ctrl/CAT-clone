@@ -38,7 +38,7 @@ def validate_date_range(
     date_from: date | None,
     date_to: date | None,
     default_days_back: int = 30,
-    max_range_days: int = 366,
+    max_range_days: int = 730,
 ) -> tuple[date, date]:
     """
     Apply defaults and validate the date range.

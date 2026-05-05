@@ -30,6 +30,11 @@ def get_l1_scraper(platform_name: str):
         "Лента": _get_lenta,
         "Самокат": _get_samocat,
         "Samocat": _get_samocat,
+        "Пятёрочка": _get_pyaterochka,
+        "Pyaterochka": _get_pyaterochka,
+        "5ka": _get_pyaterochka,
+        "Магнит": _get_magnit,
+        "Magnit": _get_magnit,
     }
 
     factory = _L1_MAP.get(platform_name)
@@ -59,3 +64,13 @@ def _get_lenta(proxy_rotator):
 def _get_samocat(proxy_rotator):
     from app.scrapers.samocat import SamokatScraper
     return SamokatScraper(proxy_rotator)
+
+
+def _get_pyaterochka(proxy_rotator):
+    from app.scrapers.pyaterochka import PyaterochkaScraper
+    return PyaterochkaScraper(proxy_rotator)
+
+
+def _get_magnit(proxy_rotator):
+    from app.scrapers.magnit import MagnitScraper
+    return MagnitScraper(proxy_rotator)

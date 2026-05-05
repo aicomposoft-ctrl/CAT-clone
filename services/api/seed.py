@@ -57,6 +57,8 @@ async def seed_platforms() -> None:
         {"name": "Самокат", "type": "darkstore", "schedule_cron": "0 4 * * *"},
         # Latin "Lenta" matches collector orchestrator + Alembic migrations0015/0016
         {"name": "Lenta", "type": "retailer", "schedule_cron": "0 5 * * *"},
+        {"name": "Пятёрочка", "type": "retailer", "schedule_cron": "0 6 * * *"},
+        {"name": "Магнит", "type": "retailer", "schedule_cron": "0 7 * * *"},
     ]
     async with SessionLocal() as db:
         result = await db.execute(text("SELECT COUNT(*) FROM platforms"))

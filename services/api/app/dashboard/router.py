@@ -152,7 +152,7 @@ async def _build_summary(db: AsyncSession, org_id: UUID) -> DashboardSummary:
     recent_alerts_result = await db.execute(recent_alerts_stmt, p)
 
     avg_row = avg_result.fetchone()
-    avg_content_score = float(avg_row.avg_score) if avg_row and avg_row.avg_score else None
+    avg_content_score = round(float(avg_row.avg_score) * 100, 1) if avg_row and avg_row.avg_score else None
 
     alerts_row = alerts_result.fetchone()
     active_alerts_count = int(alerts_row.cnt) if alerts_row else 0
@@ -173,7 +173,7 @@ async def _build_summary(db: AsyncSession, org_id: UUID) -> DashboardSummary:
             sku_name=row.sku_name,
             article=row.article,
             platform_name=row.platform_name,
-            content_total=float(row.content_total) if row.content_total is not None else None,
+            content_total=round(float(row.content_total) * 100, 1) if row.content_total is not None else None,
             scored_at=row.scored_at,
         )
         for row in red_zone_result.fetchall()

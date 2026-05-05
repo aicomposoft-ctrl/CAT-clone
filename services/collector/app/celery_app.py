@@ -77,6 +77,16 @@ celery_app = Celery(
         "app.tasks.lenta_stock_task",
         "app.tasks.lenta_reviews_task",
         "app.tasks.lenta_orchestrator",
+        "app.tasks.pyaterochka_content_task",
+        "app.tasks.pyaterochka_price_task",
+        "app.tasks.pyaterochka_stock_task",
+        "app.tasks.pyaterochka_reviews_task",
+        "app.tasks.pyaterochka_orchestrator",
+        "app.tasks.magnit_content_task",
+        "app.tasks.magnit_price_task",
+        "app.tasks.magnit_stock_task",
+        "app.tasks.magnit_reviews_task",
+        "app.tasks.magnit_orchestrator",
     ],
 )
 
@@ -95,6 +105,10 @@ celery_app.conf.update(
         "wb.*": {"queue": "playwright"},
         "samocat.*": {"queue": "playwright"},
         "lenta.*": {"queue": "playwright"},
+        # Пятёрочка и Магнит — простые ретейлеры без агрессивного антибота.
+        # L1 httpx достаточно; Playwright доступен как fallback через ScraperRouter.
+        "pyaterochka.*": {"queue": "playwright"},
+        "magnit.*": {"queue": "playwright"},
     },
 )
 

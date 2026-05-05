@@ -1,196 +1,212 @@
-# Handoff Note for Cursor — 2026-04-20 (rev 4)
+# Хендофф для Cursor — 2026-04-20 (rev 8)
 
-## Status after 3 test runs + deep investigation
+## Статус (актуальный)
 
-| Platform | Content | Price | Chain | Notes |
-|----------|---------|-------|-------|-------|
-| Wildberries | ❌ ALL FAIL | ❌ ALL FAIL | L0→L2→L3 | WB deployed **wbaas fingerprint challenge** on ALL endpoints. Blocked at all levels. See WB section below. |
-| Ozon | ✅ L2 | ✅ L2 2090 RUB | L0→L2→L3 | L0 NOT_FOUND (own seller), L2 working with patchright. |
-| Лента | ❌ FAIL | ❌ FAIL | L1→L2→L3 | L1 gets 401 → ANTIBOT_BLOCK (fast). L2 blocked by Qrator. Google warm-up enabled. |
-| Самокат | ❌ FAIL | ❌ FAIL | L2→L3 | L2 blocked by Qrator. Google warm-up enabled. |
-
----
-
-## Critical Finding: WB wbaas Anti-Bot System
-
-### Root Cause (investigated 2026-04-20)
-
-WB deployed **wbaas** — a comprehensive fingerprinting anti-bot system — across ALL WB domains and APIs. This blocks every scraping level:
-
-**WB L1 (curl_cffi):**
-- `card.wb.ru/cards/v2/detail` → HTTP 404 + `x-pow: status=invalid;challenge=7,8,1,...`
-- The `x-pow` challenge requires solving a **Proof of Work** using browser fingerprinting data
-- `curl_cffi` TLS impersonation bypasses TLS checks but cannot solve fingerprint-based PoW
-- `card.wildberries.ru` doesn't resolve from Docker container
-
-**WB L2/L3 (patchright browser):**
-- `www.wildberries.ru` → HTTP 498 + wbaas challenge page ("Почти готово... Проверяем браузер")
-- Browser loads `challenge_fingerprint_v1.0.23.js` + `challenge_solver_v1.0.4.js`
-- `POST /__wbaas/challenges/antibot/api/v1/create-token` called 4 times → all fail with 498
-- Headless Chromium (even patchright) fails the fingerprinting: canvas/WebGL/audio detectable
-
-**The wbaas challenge flow:**
-```
-Client → GET www.wildberries.ru/... → 498 "Почти готово"
-Browser → loads challenge_fingerprint_v1.0.23.js (126KB, fingerprints browser)
-Browser → loads challenge_solver_v1.0.4.js (44KB, solves PoW)
-Browser → POST /api/v1/create-token {fingerprint, solution} → 498 (headless detected)
-                                                              → 200 + x_wbaas_token cookie (real browser)
-```
-
-### WB Workaround Options
-
-**Option 1 (fastest): Residential proxy (ProxyLine/Bright Data)**
-- Different IP reputation may help
-- But fingerprinting still detects headless — partial fix at best
-- Cost: ~$0.01-0.05/GB residential
-
-**Option 2: `playwright-stealth` equivalent for Python**
-- Canvas fingerprint spoofing (randomize canvas noise)
-- WebGL vendor/renderer spoofing
-- Audio context fingerprint normalization
-- Navigator.plugins polyfill
-- See: https://github.com/Kaliiiiiiiiii-Vinyzu/patchright (check latest stealth features)
-
-**Option 3: Remote browser via Browserless/Bright Data's Browser API**
-- Real browser hosted on real IPs
-- Most reliable but expensive (~$200/mo)
-
-**Option 4: Find WB mobile API endpoint**
-- WB Android app uses separate endpoints (`mobile-api.wildberries.ru`) — DNS doesn't resolve from Docker
-- If resolved: would need app-specific auth tokens
-- Not currently viable from VPS
-
-**Option 5: Accept WB partial coverage**
-- WB is 1/4 platforms. Ozon/Lenta/Samocat progress more important
-- WB data gap documented in dashboard
-
-### What NOT to do
-- Don't try to implement wbaas PoW solver in Python: the challenge requires fingerprint data computed in JS (canvas hash, WebGL, audio) — not just SHA256 brute force
-- Don't waste time on different curl_cffi parameters: the core issue is fingerprinting, not TLS
+| Платформа | Контент | Цена | Статус |
+|-----------|---------|------|--------|
+| Wildberries | ❌ | ❌ | wbaas fingerprint — блокирует ВСЕ уровни |
+| Ozon | ❌ | ❌ | Миграция 0017 применена, warm-up убран — но challenge_page всё равно. Возможно Akamai усилили |
+| Лента | ❌ | ❌ | L1→401, L2 Qrator |
+| Самокат | ❌ | ❌ | L2 Qrator, нет числового product_id |
+| **Пятёрочка** | **🆕 готов** | **🆕 готов** | **Скрапер реализован, нужен product_id** |
+| **Магнит** | **🆕 готов** | **🆕 готов** | **Скрапер реализован, нужен product_id** |
 
 ---
 
-## What changed since rev 3 (previous handoff)
+## Статус после rev 6
 
-All rev 3 fixes are still in place:
-1. WB nm_id mismatch detection (L0)
-2. WB price kopecks bug fix (L0)
-3. L0 NOT_FOUND → L2 fallback
-4. Lenta/Samocat 401 → ANTIBOT_BLOCK (fast fallback)
-5. L1 PARSE_ERROR → L2 fallback (Samocat slug)
-6. Google search warm-up (working — confirmed "search warm-up complete engine=google")
+**Что произошло:**
+- Пятёрочка L1: `/api/v1/products/3606463/` → 403 (Cloudflare защищает endpoint)
+- Пятёрочка L2: `challenge_page` — `anti_bot.py` поймал `challenge-platform` (Cloudflare JS challenge)
+- Магнит L1: `/api/v1/product/1000184169/` → 301 → 404 (endpoint не существует)
+- Магнит L2: не дошёл, таск завершился после 404
 
-**New in rev 4:**
-- `wildberries.py` updated with accurate wbaas status documentation in docstring and `_CARD_APIS` comment
-- No code changes that affect behavior (WB is blocked regardless)
+**Что поправлено в rev 7:**
+- Пятёрочка: L1 теперь пробует сначала `/api/v1/products/{plu}/`, при 403 автоматом падает на `/api/v2/search/?search_text={plu}` — search API не за CF
+- Магнит: L1 перебирает 4 варианта endpoint'а; при всех ошибках ScraperRouter поднимает L2 Playwright
+- `scraper_router.py`: добавлены URL-шаблоны для обоих (`5ka.ru/product/{sku_id}/`, `magnit.ru/product/{sku_id}/`) — теперь L2 навигирует по правильному URL
 
 ---
 
-## How to test (updated for rev 4)
+## Приоритет 1 — Запустить Пятёрочку и Магнит
 
-### 0. Restart collector-playwright
-```bash
-docker compose up -d --force-recreate collector-playwright
-```
+### Шаг 1. Применить миграцию 0018 (добавить платформы в БД)
 
-### 1. Run Ozon content (this should still work at L2)
-```bash
-docker compose exec collector-playwright celery -A app.celery_app.celery_app call \
-  ozon.collect_content --args='["a8741901-d635-457d-b82a-b84f77289fc7"]'
-```
-
-Expected log:
-```
-PlaywrightScraper: search warm-up complete for Ozon engine=google
-ScraperRouter: collected content for sku=3504337170 via Ozon (level=l2)
-```
-
-### 2. Run WB (will fail, but verify correct failure path)
-```bash
-docker compose exec collector-playwright celery -A app.celery_app.celery_app call \
-  wb.collect_content --args='["cb10c6e7-237d-4eee-9614-ad61d5081cf9"]'
-```
-
-Expected log:
-```
-ScraperRouter: level=l0 NOT_FOUND for Wildberries sku=844578103 — not in seller catalog
-PlaywrightScraper: search warm-up complete for Wildberries engine=google  
-PlaywrightScraper: anti-bot page detected at wildberries.ru/... (challenge_page)
-ScraperRouter: ALL_LEVELS_FAILED for Wildberries
-```
-
-### 3. Verify DB state for Ozon
 ```bash
 docker compose exec postgres psql -U cat_user cat_db -c \
-  "SELECT cs.collected_title, cs.scraper_level, cs.created_at 
-   FROM content_scores cs JOIN sku_platforms sp ON sp.id=cs.sku_platform_id 
-   WHERE sp.id='a8741901-d635-457d-b82a-b84f77289fc7' 
-   ORDER BY cs.created_at DESC LIMIT 3;"
+  "INSERT INTO platforms (id, name, type, schedule_cron, is_active)
+   VALUES
+       (gen_random_uuid(), 'Пятёрочка', 'retailer', '0 6 * * *', TRUE),
+       (gen_random_uuid(), 'Магнит',    'retailer', '0 7 * * *', TRUE)
+   ON CONFLICT (name) DO NOTHING;"
 ```
 
----
+Проверить:
+```bash
+docker compose exec postgres psql -U cat_user cat_db -c \
+  "SELECT id, name, type FROM platforms ORDER BY name;"
+```
 
-## Remaining blockers
+### Шаг 2. Найти product_id товара Агуша на каждой платформе
 
-### WB — wbaas fingerprint challenge (see Critical Finding above)
-Priority: Medium (Ozon works; WB data gap acceptable for MVP)
-Action: Need residential proxy + stealth patches to proceed
+**Пятёрочка (5ka.ru) — найти PLU:**
+```bash
+# Поиск через публичный API (запустить с хоста или в контейнере)
+python scripts/find_product_ids.py "агуша яблоко банан печенье"
+```
 
-### Лента — Qrator CDN block
-Even with Google warm-up, Qrator does deep JS fingerprinting.
-Same options as WB wbaas — residential proxy is the most realistic fix.
-Alternative: Lenta mobile API (requires auth token from app)
+Или вручную:
+- Открыть https://5ka.ru, найти товар "Агуша яблоко-банан-печенье 90г"
+- URL страницы: `/product/agusha-fruktovoe-pyure-{slug}-{PLU}/` — PLU это число в конце
+- Или DevTools → Network → найти запрос `/api/v1/products/{PLU}/`
 
-### Самокат — Qrator + numeric product ID
-Same Qrator protection as Лента.
-Additionally: `external_id` is a URL slug. The numeric product_id can be found in:
-`Network → XHR → api.samokat.ru/v2/items/{NUMBER}` when browsing the product page.
-Once found:
+**Магнит (magnit.ru) — найти product_id:**
+- Открыть https://magnit.ru, найти товар "Агуша яблоко-банан"
+- DevTools → Network → найти запрос к `/api/v1/product/{id}/`
+- Или скрипт: `python scripts/find_product_ids.py "агуша яблоко банан"`
+
+### Шаг 3. Добавить sku_platforms для найденных product_id
+
 ```sql
-UPDATE sku_platforms SET external_id = '<numeric_id>'
-WHERE id = 'f538027a-9ac5-45a0-b879-9031ac962be1';
+-- Сначала получить id платформ и org_id
+SELECT id, name FROM platforms WHERE name IN ('Пятёрочка', 'Магнит');
+SELECT id FROM organizations LIMIT 1;  -- demo org
+SELECT id FROM skus LIMIT 1;           -- агуша SKU
+
+-- Добавить Пятёрочку (подставить реальные UUID и PLU)
+INSERT INTO sku_platforms (id, sku_id, platform_id, external_id, url, is_monitored)
+VALUES (
+    gen_random_uuid(),
+    '<sku_id агуши>',
+    '<platform_id Пятёрочки>',
+    '<PLU числовой>',
+    'https://5ka.ru/product/agusha-...',
+    TRUE
+);
+
+-- Добавить Магнит (подставить реальные UUID и product_id)
+INSERT INTO sku_platforms (id, sku_id, platform_id, external_id, url, is_monitored)
+VALUES (
+    gen_random_uuid(),
+    '<sku_id агуши>',
+    '<platform_id Магнита>',
+    '<product_id числовой>',
+    'https://magnit.ru/product/agusha-...',
+    TRUE
+);
+```
+
+### Шаг 3б. Диагностика Магнит — найти правильный API endpoint
+
+Открыть браузер → `magnit.ru` → найти товар Агуша → открыть DevTools → вкладка Network → фильтр "Fetch/XHR" → обновить страницу → найти запрос с JSON-ответом содержащим `name: "Агуша"` или `price`.
+
+**Что записать:**
+- Полный URL запроса (будет что-то вроде `magnit.ru/api/v{N}/{path}/{id}`)
+- Статус ответа (200)
+- Формат ID в URL
+
+Потом сообщить Claude — он обновит `magnit.py` на правильный endpoint.
+
+### Шаг 4. Пересоздать воркер и прогнать
+
+```bash
+docker compose up -d --force-recreate collector-playwright
+
+# Запуск content-таска (подставить sku_platform_id из INSERT выше)
+docker compose exec collector-playwright celery -A app.celery_app.celery_app call \
+  pyaterochka.collect_content --args='["<sku_platform_id>"]'
+
+docker compose exec collector-playwright celery -A app.celery_app.celery_app call \
+  magnit.collect_content --args='["<sku_platform_id>"]'
+```
+
+**Ожидаемые логи (SUCCESS):**
+```
+collect_pyaterochka_content: done sku_platform=<id> scraper_level=1
+```
+или scraper_level=2 — если L1 httpx упал и ScraperRouter поднял Playwright.
+
+**Признак успеха в БД:**
+```sql
+SELECT collected_title, scraper_level, created_at
+FROM content_scores
+WHERE sku_platform_id = '<sku_platform_id>'
+ORDER BY created_at DESC LIMIT 1;
 ```
 
 ---
 
-## Known gaps (not blocking MVP)
+## Почему Пятёрочка и Магнит должны работать
 
-1. **E5 text scoring** — `description_score` + `composition_score` = 0 until model downloaded.
-   Download: `docker compose exec processor python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-base')"`
-
-2. **`cat.compute_text_embedding` routing** — task sent to `celery` queue, no worker consumes it.
-   Fix: route to `ml` queue. Text scoring deferred.
-
-3. **WB data gap** — WB scraping blocked until wbaas bypass implemented.
-
-4. **Distribution plan** — empty dashboard. Not needed for content/price MVP.
+- Нет Qrator CDN (в отличие от Лента/Самокат)
+- Нет Akamai Bot Manager (в отличие от Ozon)
+- Нет wbaas fingerprinting (в отличие от WB)
+- Публичные REST API без токенов: `5ka.ru/api/v1/products/{plu}/` и `magnit.ru/api/v1/product/{id}/`
+- L1 httpx ожидается рабочим; L2 Playwright как fallback тоже не заблокирован
 
 ---
 
-## SKU reference
+## Что было до (Ozon — миграция 0017 применена, но не помогло)
 
-| Field | Value |
-|-------|-------|
-| SKU ID | `ad1eff66-e6be-4498-8214-29321e892ad6` |
-| SKU name | Фруктовое пюре Яблоко-банан-печенье 90г |
-| WB sku_platform | `cb10c6e7-237d-4eee-9614-ad61d5081cf9` | external_id=844578103 |
-| Ozon sku_platform | `a8741901-d635-457d-b82a-b84f77289fc7` | external_id=3504337170 |
-| Лента sku_platform | `b6c45ea3-152a-4b77-afde-2db8dde27a20` | external_id=380973 |
-| Самокат sku_platform | `f538027a-9ac5-45a0-b879-9031ac962be1` | external_id=fruktovoe-pyure-agusha... (slug) |
+**Ситуация:** после применения 0017 (убрали `yandex_warmup` из Ozon) warm-up строка исчезла из логов, но challenge_page на L2 продолжается.
+
+**Вывод:** Akamai мог сменить паттерн детектирования headless после нашего тестирования, либо challenge усилился независимо. Без residential proxy вероятно не решить в ближайшее время. Ozon — откладываем, беремся за Пятёрочку/Магнит.
 
 ---
 
-## Architecture note: wbaas vs x-pow
+## Статус по WB (не изменился)
 
-The `x-pow` header on `card.wb.ru` and `server: wbaas` on all WB endpoints reveal that WB's
-anti-bot is a single unified system (`wbaas`). The x-pow header is wbaas's API-level challenge
-mechanism — it carries a serialized challenge that the browser normally solves via `challenge_solver_v1.0.4.js`
-running in a sandboxed iframe. The solver:
-1. Posts an empty `create-token` request
-2. Receives challenge + fingerprint script path
-3. Runs `challenge_fingerprint_v1.0.23.js` to collect browser fingerprints
-4. POSTs `{challenge, solution}` to `create-token`
-5. Gets `x_wbaas_token` cookie on success
+WB раскатил **wbaas** — единую антибот-систему с фингерпринтингом — на всех API:
+- `card.wb.ru` → HTTP 404 + `x-pow: status=invalid;challenge=...` (PoW требует browser fingerprint)
+- `www.wildberries.ru` → HTTP 498 → `create-token` падает 4 раза (headless детектируется)
+- Все уровни заблокированы
 
-Without the browser fingerprint, the x-pow challenge cannot be solved in pure Python.
+**Варианты решения WB:**
+1. Резидентный прокси (ProxyLine/Bright Data RU)
+2. Playwright-stealth с spoofing canvas/WebGL/audio fingerprint
+3. Принять как техдолг
+
+---
+
+## Справочник SKU
+
+| Платформа | sku_platform_id | external_id |
+|-----------|----------------|-------------|
+| WB | `cb10c6e7-237d-4eee-9614-ad61d5081cf9` | 844578103 |
+| Ozon | `a8741901-d635-457d-b82a-b84f77289fc7` | 3504337170 |
+| Лента | `b6c45ea3-152a-4b77-afde-2db8dde27a20` | 380973 |
+| Самокат | `f538027a-9ac5-45a0-b879-9031ac962be1` | slug (нужен numeric) |
+| Пятёрочка | нужно создать | **нужно найти PLU** |
+| Магнит | нужно создать | **нужно найти product_id** |
+
+---
+
+## Известные нефиксированные пробелы (не блокируют MVP)
+
+1. **E5 text scoring** — `description_score` + `composition_score` = 0 пока модель не скачана:
+   ```bash
+   docker compose exec processor python -c \
+     "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-base')"
+   ```
+
+2. **`cat.compute_text_embedding` routing** — таск отправляется в очередь `celery`, воркер слушает `ml`.
+
+3. **WB data gap** — заблокирован wbaas.
+
+4. **Самокат** — нужен числовой product_id: открыть DevTools на `api.samokat.ru/v2/items/{ЧИСЛО}`, затем:
+   ```sql
+   UPDATE sku_platforms SET external_id = '<numeric_id>'
+   WHERE id = 'f538027a-9ac5-45a0-b879-9031ac962be1';
+   ```
+
+---
+
+## Операционное правило для L3 (важно)
+
+- Для ручных прогонов L3 (`AgentScraper`) в текущем окружении используем режим **VPN OFF**.
+- При VPN ON провайдеры L3 могут возвращать региональные/сетевые ограничения и нестабильные ошибки.
+- Рабочий порядок запуска:
+  1) проверить `.env`: `L3_PROVIDER=anthropic` (или `openai`, если доступен в регионе);
+  2) подтвердить, что VPN выключен;
+  3) перезапустить `collector-playwright`;
+  4) запускать `*.collect_price`/`*.collect_content`.

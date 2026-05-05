@@ -101,6 +101,9 @@ SPARC column: P1=docs · P2=validation · P3=impl · P4=review. ✅ all phases �
 | 33 | NLP topic clustering | P2 | 16 | 13 | 🔲 Planned | 🔲 |
 | 34 | Dynamic scraper scheduling | P2 | 17 | 8 | 🔲 Planned | 🔲 |
 | 35 | Platform onboarding wizard | P2 | 17 | 13 | 🔲 Planned | 🔲 |
+| 36 | OCR image scoring | P1 | 18 | 13 | 🔲 Planned | 🔲 |
+| 37 | Ozon scraper (post-MVP) | P1 | 19 | 13 | 🔲 Planned | 🔲 |
+| 38 | Лента scraper fix | P1 | 19 | 5 | 🔲 Planned | 🔲 |
 
 **Sprint 1:** Полностью завершён ✅ (Auth · SKU CRUD · Reference Upload S3)
 **Sprint 2:** Полностью завершён ✅ (WB · Ozon · Самокат · Лента scrapers)
@@ -126,9 +129,9 @@ SPARC column: P1=docs · P2=validation · P3=impl · P4=review. ✅ all phases �
 
 **🎉 MVP COMPLETE** — все 20 фич реализованы.
 
-**🚀 Post-MVP Sprint 11–17** — 15 фич в очереди (features 21–35).
+**🚀 Post-MVP Sprint 11–19** — 17 фич в очереди (features 21–38).
 
-### Feature Descriptions (21–35)
+### Feature Descriptions (21–38)
 
 | # | Slug | Описание |
 |---|------|----------|
@@ -147,6 +150,9 @@ SPARC column: P1=docs · P2=validation · P3=impl · P4=review. ✅ all phases �
 | 33 | `nlp-topic-clustering` | Кластеризация текстов отзывов для извлечения топ-тем (позитив/негатив/нейтраль). KeyBERT или LDA поверх ruBERT embeddings. Нужно для Excel Reviews v2. |
 | 34 | `scraper-scheduler` | Динамическое управление расписанием Celery Beat из БД. Читать `Platform.schedule_cron` вместо хардкода. UI: редактировать cron выражение с валидацией. |
 | 35 | `platform-onboarding` | Wizard добавления новой платформы: название, тип, URL-шаблон, тест-запрос, маппинг полей ответа. Генерация конфига scraper без правки кода. |
+| 36 | `ocr-image-scoring` | OCR-компонента для контентного скоринга: easyocr (русский язык) читает текст с упаковки → fuzzy match с эталонным текстом → `ocr_score` (0–1). CLIP не читает мелкий текст на этикетке — OCR закрывает этот gap. Добавить поле `ocr_score` в `content_scores`, включить в формулу с весом ~0.15 (перераспределить image: 0.35, desc: 0.30, comp: 0.20, ocr: 0.15). UI: отдельная строка в Descriptions drawer. |
+| 37 | `ozon-scraper` | Ozon scraper через Playwright с реальным Chrome профилем. curl_cffi с TLS impersonation не проходит Akamai Bot Manager — требуется полноценный браузер. Endpoint подтверждён: `composer-api.bx/page/json/v2?url=/product/{id}/`. Возможна альтернатива: residential proxy + httpx. |
+| 38 | `lenta-scraper-fix` | Старый endpoint `/api/v1/products/{id}` возвращает 404 (устарел). Новый API под `/api-gateway/v1/` — нужно найти product detail endpoint через DevTools на странице товара. Известный CDN: `cdn.lentochka.lenta.com`. Product ID формат: числовой (`380973`). |
 
 ## License
 

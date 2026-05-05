@@ -103,7 +103,7 @@ def score_pending_reviews(self, batch_limit: int = _BATCH_LIMIT) -> dict:
                     text("""
                         UPDATE reviews
                         SET sentiment = :sentiment, sentiment_score = :score
-                        WHERE id = :id::uuid
+                        WHERE id = CAST(:id AS uuid)
                     """),
                     updates,
                 )

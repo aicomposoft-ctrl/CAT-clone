@@ -129,6 +129,7 @@ export const platformsApi = {
 }
 
 const MINIO_BUCKET_REFERENCES = 'cat-references'
+const MINIO_BUCKET_DATA = 'cat-data'
 
 /**
  * Presigned URLs: use as-is when they already target host MinIO on :9000 (published in docker-compose).
@@ -164,6 +165,17 @@ export function referenceStorageKeyToImageSrc(stored: string | null): string | n
     return `/s3/${key}`
   }
   return `/s3/${MINIO_BUCKET_REFERENCES}/${key}`
+}
+
+/** DB stores S3 object key under bucket cat-data (collector bucket), not a full URL. */
+export function collectedStorageKeyToImageSrc(stored: string | null): string | null {
+  if (!stored) return null
+  if (/^https?:\/\//i.test(stored)) return rewriteMinioUrl(stored)
+  const key = stored.replace(/^\/+/, '')
+  if (key.startsWith(`${MINIO_BUCKET_DATA}/`)) {
+    return `/s3/${key}`
+  }
+  return `/s3/${MINIO_BUCKET_DATA}/${key}`
 }
 
 // ── SKU Reference ────────────────────────────────────────────────────────

@@ -221,55 +221,76 @@ class MagnitScraper(BaseScraper):
 
     async def collect_reviews(self, product_id: str, take: int = 50) -> list[ReviewData]:
         """
-        Collect the most recent product reviews from Magnit.
+        Collect public product reviews from Magnit.
 
-        Returns an empty list if reviews are unavailable.
+        Endpoint confirmed via DevTools (2026-05-04):
+        GET /webgate/v1/listing/object-reviews
+            ?service=dostavka&objectType=product&objectId={id}&limit=10&page=N
+
+        Pagination: API caps at ~10 items per page regardless of limit param.
+        Uses page (0-based) not offset.
 
         Raises:
             ScraperError("API_UNAVAILABLE") — 5xx or network error after retries
             ScraperError("RATE_LIMITED")    — 429 after retries exhausted
         """
-        url = f"{self._BASE_API}/product/{product_id}/reviews/"
-        params = {"limit": min(take, 50), "offset": 0}
+        url = "https://magnit.ru/webgate/v1/listing/object-reviews"
+        collected: list[ReviewData] = []
+        page = 0
+        page_size = 10  # API caps here regardless of limit param
 
-        async def _fetch():
-            resp = await self._get(url, params=params, headers=self._HEADERS)
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            return resp.json()
+        while len(collected) < take:
+            params = {
+                "service": "dostavka",
+                "objectType": "product",
+                "objectId": product_id,
+                "limit": page_size,
+                "page": page,
+            }
 
-        try:
+            async def _fetch(p=params):
+                resp = await self._get(url, params=p, headers=self._HEADERS)
+                if resp.status_code in (404, 410):
+                    return None
+                resp.raise_for_status()
+                return resp.json()
+
             data = await self.with_retry(_fetch)
-        except ScraperError as exc:
-            if exc.code == "NOT_FOUND":
-                return []
-            raise
 
-        if data is None:
-            return []
+            if data is None:
+                break
 
-        results = data if isinstance(data, list) else (
-            data.get("results") or data.get("reviews") or data.get("items") or []
+            raw_items: list = data.get("reviews") or []
+            if not raw_items:
+                break
+
+            for item in raw_items:
+                ext_id = item.get("reviewId") or item.get("id") or item.get("uuid")
+                if not ext_id:
+                    continue
+
+                raw_rating = item.get("rating") or item.get("grade") or item.get("score") or 5
+                rating = max(1, min(5, int(raw_rating)))
+
+                collected.append(ReviewData(
+                    external_review_id=str(ext_id),
+                    review_text=sanitize(
+                        item.get("comment") or item.get("text") or item.get("body") or "", 5000
+                    ),
+                    rating=rating,
+                    review_date=_parse_review_date(
+                        item.get("dateCreated") or item.get("createdAt") or item.get("date")
+                    ),
+                ))
+
+            if len(raw_items) < page_size:
+                break  # last page
+            page += 1
+
+        logger.info(
+            "MagnitScraper: collected %d reviews for product_id=%s", len(collected), product_id
         )
-        reviews: list[ReviewData] = []
-
-        for item in results:
-            ext_id = item.get("id") or item.get("reviewId")
-            if not ext_id:
-                continue
-
-            raw_rating = item.get("rating") or item.get("grade") or 5
-            rating = max(1, min(5, int(raw_rating)))
-
-            reviews.append(ReviewData(
-                external_review_id=str(ext_id),
-                review_text=sanitize(item.get("text") or item.get("comment") or "", 5000),
-                rating=rating,
-                review_date=_parse_review_date(item.get("date") or item.get("createdAt")),
-            ))
-
-        return reviews
+        return collected[:take]
 
     def collect(self, sku_id: str, data_type: DataType) -> ScrapedData:
         """Sync entry point for ScraperRouter."""
@@ -365,7 +386,7 @@ class MagnitScraper(BaseScraper):
 
 
 def _extract_product_from_ldjson(html: str) -> Optional[dict]:
-    """Extract product fields from schema.org Product JSON-LD."""
+    """Extract product fields from schema.org Product JSON-LD + Nuxt SSR payload."""
     blocks = re.findall(
         r"<script[^>]*application/ld\+json[^>]*>(.*?)</script>",
         html,
@@ -407,9 +428,35 @@ def _extract_product_from_ldjson(html: str) -> Optional[dict]:
         return {
             "name": obj.get("name"),
             "description": obj.get("description"),
+            "composition": _extract_composition_from_nuxt(html),
             "images": [image] if image else [],
             "price": price,
             "currentPrice": price,
             "oldPrice": original_price,
         }
     return None
+
+
+def _extract_composition_from_nuxt(html: str) -> Optional[str]:
+    """
+    Extract product composition from the Nuxt SSR inline payload.
+
+    Magnit renders composition in a Nuxt serialized state as:
+      "Состав",[],"stringType","<composition text>"
+    The text may contain escaped \\n characters (soft line breaks from label printing).
+    """
+    scripts = re.findall(r"<script[^>]*>(.*?)</script>", html, flags=re.IGNORECASE | re.DOTALL)
+    big = max(scripts, key=len) if scripts else ""
+    m = re.search(
+        r'"Состав"\s*,\s*\[\]\s*,\s*"stringType"\s*,\s*"(.*?)"',
+        big,
+        flags=re.DOTALL,
+    )
+    if not m:
+        return None
+    raw = m.group(1)
+    # Join hyphenated line breaks (label printing splits words: "нату-\nральный" → "натуральный")
+    composition = re.sub(r"-\\+n", "", raw)
+    # Remove remaining soft line breaks
+    composition = re.sub(r"\\+n", " ", composition).strip()
+    return composition or None

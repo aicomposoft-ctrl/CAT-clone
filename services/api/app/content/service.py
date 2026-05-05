@@ -41,6 +41,9 @@ async def get_content_scores(
         size=size,
     )
 
+    def _pct(v) -> float | None:
+        return round(float(v) * 100, 1) if v is not None else None
+
     items = [
         ContentScoreItem(
             id=row.id,
@@ -54,10 +57,10 @@ async def get_content_scores(
             platform_name=row.platform_name,
             platform_url=row.platform_url,
             scored_at=row.scored_at,
-            content_total=row.content_total,
-            image_score=row.image_score,
-            description_score=row.description_score,
-            composition_score=row.composition_score,
+            content_total=_pct(row.content_total),
+            image_score=_pct(row.image_score),
+            description_score=_pct(row.description_score),
+            composition_score=_pct(row.composition_score),
             collected_image_url=row.collected_image_url,
             created_at=row.created_at,
         )
@@ -81,6 +84,9 @@ async def get_content_drilldown(
         for h in history_rows
     ]
 
+    def _pct(v) -> float | None:
+        return round(float(v) * 100, 1) if v is not None else None
+
     return ContentScoreDrilldown(
         id=row.id,
         sku_platform_id=row.sku_platform_id,
@@ -93,10 +99,10 @@ async def get_content_drilldown(
         platform_name=row.platform_name,
         platform_url=row.platform_url,
         scored_at=row.scored_at,
-        content_total=row.content_total,
-        image_score=row.image_score,
-        description_score=row.description_score,
-        composition_score=row.composition_score,
+        content_total=_pct(row.content_total),
+        image_score=_pct(row.image_score),
+        description_score=_pct(row.description_score),
+        composition_score=_pct(row.composition_score),
         collected_image_url=row.collected_image_url,
         collected_description=row.collected_description,
         collected_composition=row.collected_composition,

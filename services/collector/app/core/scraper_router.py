@@ -61,6 +61,11 @@ _L2_URL_TEMPLATES: dict[str, str] = {
     "Lenta":       "https://lenta.com/product/{sku_id}/",
     "Самокат":     "https://samokat.ru/product/{sku_id}",
     "Samocat":     "https://samokat.ru/product/{sku_id}",
+    # Пятёрочка и Магнит — URL шаблоны для L2 Playwright fallback
+    "Пятёрочка":   "https://5ka.ru/product/{sku_id}/",
+    "Pyaterochka": "https://5ka.ru/product/{sku_id}/",
+    "Магнит":      "https://magnit.ru/product/{sku_id}/",
+    "Magnit":      "https://magnit.ru/product/{sku_id}/",
 }
 
 # Allowlist of valid fallback chain level identifiers
